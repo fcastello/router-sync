@@ -94,6 +94,63 @@ A Go-based router synchronization service that manages internet providers and ro
    make docs
    ```
 
+### Linux Installation (Systemd Service)
+
+For production deployments on Linux systems, you can install router-sync as a systemd service:
+
+1. **Download the latest release**
+   ```bash
+   # For AMD64 systems
+   wget https://github.com/yourusername/router-sync/releases/latest/download/router-sync-v<VERSION>-linux-amd64.tar.gz
+   
+   # For ARM64 systems
+   wget https://github.com/yourusername/router-sync/releases/latest/download/router-sync-v<VERSION>-linux-arm64.tar.gz
+   ```
+
+2. **Extract and install**
+   ```bash
+   tar -xzf router-sync-v<VERSION>-linux-<ARCH>.tar.gz
+   cd router-sync-v<VERSION>-linux-<ARCH>
+   sudo ./install.sh
+   ```
+
+The installation script will:
+- Detect your system architecture automatically
+- Create a dedicated system user `router-sync`
+- Install the binary to `/usr/local/bin/`
+- Create configuration directory at `/etc/router-sync/`
+- Install and enable the systemd service
+- Start the service automatically
+
+3. **Configure the service**
+   ```bash
+   # Edit the configuration file
+   sudo nano /etc/router-sync/config.yaml
+   
+   # Restart the service after configuration changes
+   sudo systemctl restart router-sync
+   ```
+
+4. **Service management**
+   ```bash
+   # Check service status
+   sudo systemctl status router-sync
+   
+   # View logs
+   sudo journalctl -u router-sync -f
+   
+   # Start/Stop/Restart
+   sudo systemctl start router-sync
+   sudo systemctl stop router-sync
+   sudo systemctl restart router-sync
+   
+   # Enable/Disable auto-start
+   sudo systemctl enable router-sync
+   sudo systemctl disable router-sync
+   ```
+
+For detailed installation instructions and troubleshooting, see the [Linux Installation Guide](scripts/README.md).
+
 ## Configuration
 
 Create a `config.yaml` file in the same directory as the binary:
@@ -505,6 +562,11 @@ router-sync/
 ├── go.mod                 # Go module file
 ├── go.sum                 # Go module checksums
 ├── README.md              # This file
+├── scripts/               # Installation scripts
+│   ├── install.sh         # Linux installation script
+│   ├── router-sync.service # Systemd unit file
+│   ├── README.md          # Installation guide
+│   └── test-install.sh    # Installation test script
 └── internal/
     ├── api/               # API server and handlers
     ├── config/            # Configuration management
@@ -558,6 +620,55 @@ make docker-run
 3. Add tests
 4. Update documentation
 5. Submit pull request
+
+### Creating Releases
+
+The project includes automated release creation with Linux installation packages:
+
+1. **Prepare the release**
+   ```bash
+   # Generate changelog
+   make changelog
+   
+   # Review and commit changelog
+   git add CHANGELOG.md
+   git commit -m "docs: update changelog for v<VERSION>"
+   ```
+
+2. **Bump version**
+   ```bash
+   # Bump patch version (0.0.1 -> 0.0.2)
+   make version-bump-patch
+   
+   # Or bump minor version (0.0.1 -> 0.1.0)
+   make version-bump-minor
+   
+   # Or bump major version (0.0.1 -> 1.0.0)
+   make version-bump-major
+   ```
+
+3. **Create release artifacts**
+   ```bash
+   # Create tar.gz packages with installation scripts
+   make release
+   ```
+
+4. **Create GitHub release**
+   ```bash
+   # Create GitHub release with artifacts
+   make release-github
+   ```
+
+The release process creates:
+- `router-sync-v<VERSION>-linux-amd64.tar.gz` - AMD64 Linux package
+- `router-sync-v<VERSION>-linux-arm64.tar.gz` - ARM64 Linux package
+
+Each package includes:
+- Binary for the target architecture
+- Installation script (`install.sh`)
+- Systemd service file (`router-sync.service`)
+- Default configuration (`config.yaml`)
+- Installation documentation (`README.md`)
 
 ## Testing
 

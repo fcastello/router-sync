@@ -146,8 +146,24 @@ release: check
 	@echo "Creating release v$(VERSION)..."
 	@mkdir -p release
 	@$(MAKE) build-all
-	@tar -czf release/$(BINARY_NAME)-v$(VERSION)-linux-amd64.tar.gz -C $(BUILD_DIR) $(BINARY_NAME)-linux-amd64
-	@tar -czf release/$(BINARY_NAME)-v$(VERSION)-linux-arm64.tar.gz -C $(BUILD_DIR) $(BINARY_NAME)-linux-arm64
+	@mkdir -p release/$(BINARY_NAME)-v$(VERSION)-linux-amd64
+	@mkdir -p release/$(BINARY_NAME)-v$(VERSION)-linux-arm64
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 release/$(BINARY_NAME)-v$(VERSION)-linux-amd64/
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 release/$(BINARY_NAME)-v$(VERSION)-linux-arm64/
+	@cp scripts/install.sh release/$(BINARY_NAME)-v$(VERSION)-linux-amd64/
+	@cp scripts/install.sh release/$(BINARY_NAME)-v$(VERSION)-linux-arm64/
+	@cp scripts/router-sync.service release/$(BINARY_NAME)-v$(VERSION)-linux-amd64/
+	@cp scripts/router-sync.service release/$(BINARY_NAME)-v$(VERSION)-linux-arm64/
+	@cp scripts/README.md release/$(BINARY_NAME)-v$(VERSION)-linux-amd64/
+	@cp scripts/README.md release/$(BINARY_NAME)-v$(VERSION)-linux-arm64/
+	@cp config.yaml release/$(BINARY_NAME)-v$(VERSION)-linux-amd64/
+	@cp config.yaml release/$(BINARY_NAME)-v$(VERSION)-linux-arm64/
+	@chmod +x release/$(BINARY_NAME)-v$(VERSION)-linux-amd64/install.sh
+	@chmod +x release/$(BINARY_NAME)-v$(VERSION)-linux-arm64/install.sh
+	@tar -czf release/$(BINARY_NAME)-v$(VERSION)-linux-amd64.tar.gz -C release $(BINARY_NAME)-v$(VERSION)-linux-amd64
+	@tar -czf release/$(BINARY_NAME)-v$(VERSION)-linux-arm64.tar.gz -C release $(BINARY_NAME)-v$(VERSION)-linux-arm64
+	@rm -rf release/$(BINARY_NAME)-v$(VERSION)-linux-amd64
+	@rm -rf release/$(BINARY_NAME)-v$(VERSION)-linux-arm64
 	@echo "Release artifacts created in release/"
 	@echo "To create GitHub release:"
 	@echo "  gh release create v$(VERSION) --title 'Release v$(VERSION)' --notes-file $(CHANGELOG_FILE) release/*.tar.gz"

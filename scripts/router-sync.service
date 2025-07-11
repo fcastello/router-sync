@@ -1,0 +1,25 @@
+[Unit]
+Description=Router Sync Service
+Documentation=https://github.com/your-org/router-sync
+After=network.target
+
+[Service]
+Type=simple
+User=router-sync
+Group=router-sync
+ExecStart=/usr/local/bin/router-sync -config /etc/router-sync/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=router-sync
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/router-sync /var/lib/router-sync /etc/router-sync
+
+[Install]
+WantedBy=multi-user.target 
