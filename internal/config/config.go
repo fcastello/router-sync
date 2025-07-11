@@ -60,4 +60,4 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &config, nil
-} 
+}

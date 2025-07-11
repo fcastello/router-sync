@@ -58,3 +58,5 @@ coverage.html
 
 # Swagger docs
 docs/ 
+build/
+release/
