@@ -242,7 +242,7 @@ make version-bump-major
 ### Changelog Generation
 
 ```bash
-# Generate changelog
+# Generate changelog for next version
 make changelog
 
 # Preview changelog for next release
@@ -251,39 +251,76 @@ make changelog-preview
 
 ### Release Workflow
 
-1. **Prepare the release**
-   ```bash
-   # Bump version and create tag
-   make version-bump-patch  # or minor/major
-   
-   # Generate changelog
-   make changelog
-   
-   # Review and commit changelog
-   git add CHANGELOG.md
-   git commit -m "docs: update changelog for v0.1.1"
-   ```
+The correct release workflow follows these steps in order:
 
-2. **Push changes and tag**
-   ```bash
-   git push origin main
-   git push origin v0.1.1
-   ```
+#### Step 1: Generate Changelog (Before Version Bump)
+```bash
+# Generate changelog for the next version
+make changelog
 
-3. **Create release artifacts**
-   ```bash
-   # Build release artifacts
-   make release
-   ```
+# Review the generated CHANGELOG.md file
+# Edit if needed, then commit
+git add CHANGELOG.md
+git commit -m "docs: update changelog for v0.1.1"
+```
 
-4. **Create GitHub release**
-   ```bash
-   # Using GitHub CLI
-   gh release create v0.1.1 --title "Release v0.1.1" --notes-file CHANGELOG.md build/release/*.tar.gz
-   
-   # Or using goreleaser
-   goreleaser release
-   ```
+#### Step 2: Bump Version and Create Tag
+```bash
+# Bump version (this also creates the git tag)
+make version-bump-patch  # or version-bump-minor / version-bump-major
+
+# Push changes and tag to GitHub
+git push origin main
+git push origin v0.1.1
+```
+
+#### Step 3: Create Release Artifacts
+```bash
+# Build binaries and create tarballs
+make release
+```
+
+#### Step 4: Create GitHub Release
+```bash
+# Create GitHub release with changelog and artifacts
+make release-github
+```
+
+### Alternative: Use the Workflow Helper
+
+For convenience, you can use the workflow helper that guides you through the process:
+
+```bash
+make release-workflow
+```
+
+This will show you the exact steps to follow.
+
+### Complete Release Example
+
+Here's a complete example for releasing version 0.1.1:
+
+```bash
+# 1. Generate changelog
+make changelog
+
+# 2. Review and commit changelog
+git add CHANGELOG.md
+git commit -m "docs: update changelog for v0.1.1"
+
+# 3. Bump version (creates tag v0.1.1)
+make version-bump-patch
+
+# 4. Push changes and tag
+git push origin main
+git push origin v0.1.1
+
+# 5. Create release artifacts
+make release
+
+# 6. Create GitHub release
+make release-github
+```
 
 ### Release Checklist
 
@@ -291,9 +328,27 @@ make changelog-preview
 - [ ] Documentation is up to date
 - [ ] Changelog is generated and reviewed
 - [ ] Version is bumped and tagged
+- [ ] Changes and tag are pushed to GitHub
 - [ ] Release artifacts are built
 - [ ] GitHub release is created with proper notes
 - [ ] Docker image is built and pushed (if applicable)
+
+### Common Issues and Solutions
+
+#### "Tag already exists" Error
+If you get an error like `ERROR "v0.1.1" tag already exists`, it means you're trying to generate a changelog for a version that already has a tag. The solution is to:
+
+1. **Generate changelog BEFORE bumping version**
+2. **Or bump to the next version first**
+
+#### "git-chglog: No such file or directory"
+Install the required tools:
+```bash
+make install-tools
+```
+
+#### Tarball Creation Fails
+The release process now creates tarballs in the `release/` directory at the project root. If you encounter issues, ensure you have write permissions in the project directory.
 
 ## Pull Request Process
 
