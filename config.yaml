@@ -1,0 +1,22 @@
+# Router Sync Configuration
+
+# Log level (debug, info, warn, error)
+log_level: info
+
+# NATS configuration
+nats:
+  urls:
+    - "nats://localhost:4222"
+  username: ""
+  password: ""
+  token: ""
+  cluster_id: "router-sync-cluster"
+  client_id: "router-sync-client"
+
+# API server configuration
+api:
+  address: ":8081"
+
+# Synchronization configuration
+sync:
+  interval: 30s 

@@ -1,0 +1,47 @@
+style: github
+template: CHANGELOG.tpl.md
+info:
+  title: CHANGELOG
+  repository_url: https://github.com/fcastello/router-sync
+options:
+  commits:
+    filters:
+      Type:
+        - feat
+        - fix
+        - perf
+        - docs
+        - style
+        - refactor
+        - test
+        - chore
+        - ci
+        - build
+        - revert
+    sort_by: Scope
+  commit_groups:
+    group_by: Type
+    sort_by: Title
+    order:
+      - feat
+      - fix
+      - perf
+      - docs
+      - style
+      - refactor
+      - test
+      - chore
+      - ci
+      - build
+      - revert
+  header:
+    pattern: "^(\\w*)(?:\\(([\\w\\s.-]*)\\))?\\:\\s(.+)$"
+    pattern_maps:
+      - Type
+      - Scope
+      - Subject
+  notes:
+    keywords:
+      - BREAKING CHANGE
+      - DEPRECATED
+      - SECURITY 
