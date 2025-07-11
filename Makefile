@@ -134,7 +134,7 @@ changelog-preview:
 	@git-chglog --output - --next-tag v$(VERSION)
 
 # Release management
-release-prepare: check changelog
+release-prepare: check
 	@echo "Preparing release v$(VERSION)..."
 	@echo "Please review the changelog and commit if ready:"
 	@echo "  git add $(CHANGELOG_FILE)"
@@ -142,23 +142,36 @@ release-prepare: check changelog
 	@echo "  git push origin main"
 	@echo "  git push origin v$(VERSION)"
 
-release: release-prepare
+release: check
 	@echo "Creating release v$(VERSION)..."
-	@mkdir -p $(BUILD_DIR)/release
+	@mkdir -p release
 	@$(MAKE) build-all
-	@cd $(BUILD_DIR) && tar -czf ../release/$(BINARY_NAME)-v$(VERSION)-linux-amd64.tar.gz $(BINARY_NAME)-linux-amd64
-	@cd $(BUILD_DIR) && tar -czf ../release/$(BINARY_NAME)-v$(VERSION)-linux-arm64.tar.gz $(BINARY_NAME)-linux-arm64
-	@echo "Release artifacts created in build/release/"
+	@tar -czf release/$(BINARY_NAME)-v$(VERSION)-linux-amd64.tar.gz -C $(BUILD_DIR) $(BINARY_NAME)-linux-amd64
+	@tar -czf release/$(BINARY_NAME)-v$(VERSION)-linux-arm64.tar.gz -C $(BUILD_DIR) $(BINARY_NAME)-linux-arm64
+	@echo "Release artifacts created in release/"
 	@echo "To create GitHub release:"
-	@echo "  gh release create v$(VERSION) --title 'Release v$(VERSION)' --notes-file $(CHANGELOG_FILE) build/release/*.tar.gz"
+	@echo "  gh release create v$(VERSION) --title 'Release v$(VERSION)' --notes-file $(CHANGELOG_FILE) release/*.tar.gz"
 
 release-github: release
 	@echo "Creating GitHub release v$(VERSION)..."
-	@gh release create v$(VERSION) --title "Release v$(VERSION)" --notes-file $(CHANGELOG_FILE) build/release/*.tar.gz
+	@gh release create v$(VERSION) --title "Release v$(VERSION)" --notes-file $(CHANGELOG_FILE) release/*.tar.gz
 
 # Create release
 release-full: check changelog release-github
 	@echo "Release v$(VERSION) completed successfully!"
+
+# Correct release workflow (generate changelog before version bump)
+release-workflow:
+	@echo "Starting release workflow..."
+	@echo "1. Generating changelog for next version..."
+	@$(MAKE) changelog
+	@echo "2. Please review the changelog and commit if ready:"
+	@echo "   git add $(CHANGELOG_FILE)"
+	@echo "   git commit -m 'docs: update changelog for v$(VERSION)'"
+	@echo "3. Then bump version:"
+	@echo "   make version-bump-patch  # or minor/major"
+	@echo "4. Finally create release:"
+	@echo "   make release-github"
 
 # Install the binary
 install: build
@@ -213,6 +226,7 @@ help:
 	@echo "  release      - Create release artifacts"
 	@echo "  release-github - Create GitHub release"
 	@echo "  release-full - Complete release workflow"
+	@echo "  release-workflow - Correct release workflow (changelog before version bump)"
 	@echo "  install      - Install binary"
 	@echo "  uninstall    - Uninstall binary"
 	@echo "  run          - Run locally"
@@ -221,4 +235,4 @@ help:
 	@echo "  docker-run   - Run Docker container"
 	@echo "  help         - Show this help"
 
-.PHONY: all build build-all clean test test-coverage test-race bench deps tidy docs install-tools lint fmt vet check version version-bump-patch version-bump-minor version-bump-major changelog changelog-preview release-prepare release release-github release-full install uninstall run run-debug docker-build docker-run help 
+.PHONY: all build build-all clean test test-coverage test-race bench deps tidy docs install-tools lint fmt vet check version version-bump-patch version-bump-minor version-bump-major changelog changelog-preview release-prepare release release-github release-full release-workflow install uninstall run run-debug docker-build docker-run help 
