@@ -35,7 +35,7 @@ WORKDIR /app
 
 COPY --from=builder /app/router-sync .
 
-# Default config (Ansible overrides via bind-mount at /etc/router-sync/config.yaml).
+# Default config; override via bind-mount, e.g. -v /etc/router-sync/config.yaml:/etc/router-sync/config.yaml:ro
 COPY config.yaml /etc/router-sync/config.yaml
 
 # API: 18080, Agent: 18082

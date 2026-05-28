@@ -1,4 +1,4 @@
-# Router Sync Configuration (defaults; production uses Ansible-managed file)
+# Router Sync Configuration (defaults; override per environment, e.g. /etc/router-sync/config.yaml)
 
 log_level: warn
 

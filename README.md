@@ -58,7 +58,7 @@ A separate **web UI** container on R2 (`:18081`) talks only to the API.
 4. **Publishes** full router state every 5s (all routing tables via netlink, not just `main`).
 5. **On stop** — removes managed policy rules and the suppress-default rule.
 
-Provider **routing tables** (default routes per uplink) are provisioned by **netplan** on each router (`files/r1-netplan.yaml`, `files/r2-netplan.yaml` in `home-router`). The agent owns **policy rules** only.
+Provider **routing tables** (default routes per uplink) must exist on each router before policies work — typically via **netplan**, NetworkManager, or static `ip route` configuration (see [Production deployment](#production-deployment)). The agent owns **`ip rule` policy entries** only; it does not install per-uplink table routes today.
 
 ## Features
 
@@ -97,22 +97,83 @@ sudo ./build/router-sync --mode=agent -config config.yaml
 curl http://localhost:18082/health
 ```
 
-### Deploy (home-router Ansible)
+### Production deployment
 
-See [home-router README](https://github.com/yourusername/home-router) for full steps. Summary:
+Deploy components in this order:
 
-```bash
-make r2-nats
-make routers-router-sync-image
-make r2-router-sync-api
-make routers-router-sync-agent
-make r2-router-sync-ui
-# or: make r2-routing-stack-full
+1. **Routing tables on every router** — Create one Linux routing table per uplink, each with a default route on the correct interface. Provider `table_id` values in the API must match these table numbers. The agent will not create these routes for you.
+2. **NATS JetStream** — Run NATS on a host reachable from the API and all agents. Use authentication in production. KV buckets are created automatically on first connect.
+3. **API** (`--mode=api`) — One central instance; configure NATS URL/credentials and `api.address` (default `:18080`).
+4. **Agent** (`--mode=agent`) — One instance per router that enforces policies. Requires **host network**, **NET_ADMIN**, and `agent.hostname` matching keys in each provider's `interfaces` map (e.g. `router-a`, `router-b`).
+5. **Web UI** — Separate container or static site; point `ROUTER_SYNC_API_URL` at the API (see [`web/README.md`](web/README.md)).
+
+#### Example: netplan per-uplink tables
+
+On each router, define default routes in provider-specific tables (IDs must match API `table_id`):
+
+```yaml
+# /etc/netplan/99-router-sync.yaml (example — adjust interfaces and gateways)
+network:
+  version: 2
+  ethernets:
+    wan-telecom:
+      dhcp4: true
+      routes:
+        - to: default
+          via: 192.168.4.1
+          table: 99
+          on-link: true
+    wan-starlink:
+      dhcp4: true
+      routes:
+        - to: default
+          via: 192.168.3.1
+          table: 100
+          on-link: true
 ```
 
-- **UI**: http://192.168.2.252:18081  
-- **API**: http://192.168.2.252:18080 (JSON only — no HTML at `/`)  
-- **Swagger**: http://192.168.2.252:18080/swagger/index.html  
+Apply with `sudo netplan apply`. Repeat equivalent configuration on every router that participates.
+
+#### Example: API container
+
+```bash
+docker run -d --name router-sync-api \
+  -p 18080:18080 \
+  -v /etc/router-sync/config.yaml:/etc/router-sync/config.yaml:ro \
+  router-sync:latest \
+  --mode=api -config /etc/router-sync/config.yaml
+```
+
+`config.yaml` for the API should set `mode: api`, NATS `urls` / credentials, and `api.address: ":18080"`.
+
+#### Example: agent container
+
+```bash
+docker run -d --name router-sync-agent \
+  --network host --cap-add NET_ADMIN \
+  -v /etc/router-sync/config.yaml:/etc/router-sync/config.yaml:ro \
+  router-sync:latest \
+  --mode=agent -config /etc/router-sync/config.yaml
+```
+
+Agent `config.yaml` must set `mode: agent`, the same NATS settings, and `agent.hostname` to this machine's router id (used in provider `interfaces` maps). Health and metrics: `:18082`.
+
+#### Example: UI container
+
+```bash
+docker build -t router-sync-ui:latest ./web
+docker run -d --name router-sync-ui -p 18081:80 \
+  -e ROUTER_SYNC_API_URL=http://<api-host>:18080 \
+  router-sync-ui:latest
+```
+
+After deployment:
+
+- **UI**: `http://<api-host>:18081`
+- **API**: `http://<api-host>:18080` (JSON only — no HTML at `/`)
+- **Swagger**: `http://<api-host>:18080/swagger/index.html`
+
+Release binaries and install scripts are on [GitHub Releases](https://github.com/fcastello/router-sync/releases). For systemd-based installs without Docker, see [`scripts/README.md`](scripts/README.md).
 
 ## Configuration
 

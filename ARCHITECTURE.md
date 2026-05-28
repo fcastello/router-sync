@@ -184,9 +184,9 @@ sequenceDiagram
 
 ## Linux routing model
 
-### Tables (netplan — home-router)
+### Tables (host network configuration)
 
-Each uplink has a dedicated routing table with a default route, e.g.:
+Each uplink needs a dedicated routing table with a default route on the correct interface. You provision these outside Router Sync (netplan, NetworkManager, `ip route`, etc.). Example layout:
 
 | Provider | Table ID | Interface (example) | Default route |
 |----------|----------|---------------------|---------------|
@@ -194,7 +194,7 @@ Each uplink has a dedicated routing table with a default route, e.g.:
 | Starlink | 100 | enp2s0 | via 192.168.3.1 |
 | Tuenti | 200 | enp3s0 | via 192.168.150.1 |
 
-Defined in `files/r1-netplan.yaml` / `files/r2-netplan.yaml`, applied with `netplan apply` or `make r1-init` / `make r2-init`.
+Apply with `netplan apply` (or your distro's equivalent) on **each** router before expecting policies to work. Provider `table_id` in NATS must match these IDs.
 
 ### Rules (agent)
 
@@ -257,20 +257,23 @@ React + Vite + TanStack Query in `web/`. Served by nginx in `router-sync-ui` wit
 
 ## Security
 
-- NATS username/password (Ansible `group_vars/secrets.yml`)
+- NATS username/password (or token) — store in your secrets manager; mount or inject into each container's `config.yaml`
 - API/UI exposed on LAN only (no auth on HTTP today)
 - Agent requires NET_ADMIN and host network
-- Config files mode `0640` on routers
+- Restrict read access to config files (e.g. mode `0640`)
 
 ## Build and deploy
 
-Single `Dockerfile` builds `./cmd/router-sync`. Ansible playbooks in `home-router`:
+Single `Dockerfile` builds `./cmd/router-sync`. Typical layout:
 
-- `router-sync-image.yml` — build image on r1 + r2
-- `router-sync-api.yml` — API on r2
-- `router-sync-agent.yml` — agents on `hosts: routers`
-- `router-sync-ui.yml` — UI on r2
-- `router-sync.yml` — orchestrator importing the above
+| Component | Count | Notes |
+|-----------|-------|-------|
+| NATS JetStream | 1 | Central; reachable from API and all agents |
+| API `--mode=api` | 1 | Published port `:18080`; no NET_ADMIN |
+| Agent `--mode=agent` | 1 per router | `--network host`, `NET_ADMIN`, unique `agent.hostname` |
+| UI (`web/`) | 1 | `ROUTER_SYNC_API_URL` → API; usually `:18081` |
+
+Build the image with `make docker-build` or pull from [releases](https://github.com/fcastello/router-sync/releases). See [README.md — Production deployment](README.md#production-deployment) for netplan, Docker run examples, and ordering.
 
 ## Related docs
 

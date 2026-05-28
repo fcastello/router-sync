@@ -34,15 +34,18 @@ docker run --rm -p 18081:80 \
   router-sync-ui:latest
 ```
 
-## Deploy on R2 (Ansible)
+## Production deploy
 
-From `home-router`:
+Build and run the UI container on any host that can reach the API (often the same machine as the API):
 
 ```bash
-make r2-router-sync-ui
+docker build -t router-sync-ui:latest .
+docker run -d --name router-sync-ui -p 18081:80 \
+  -e ROUTER_SYNC_API_URL=http://<api-host>:18080 \
+  router-sync-ui:latest
 ```
 
-Serves on port **18081** with `ROUTER_SYNC_API_URL` pointing at the API on `:18080`.
+Open **http://&lt;host&gt;:18081**. Set `ROUTER_SYNC_API_URL` to the Router Sync API base URL (no trailing slash). See [README — Production deployment](../README.md#production-deployment) for the full stack (NATS, API, agents, netplan).
 
 ## Pages
 

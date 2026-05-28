@@ -42,7 +42,7 @@ One Docker image, one binary: `router-sync --mode=api` or `--mode=agent`.
 
 ### Routing tables (netplan)
 
-Each provider has a **routing table ID** and a **default route** on the correct interface. On my network that is defined in Ansible-managed netplan (`files/r1-netplan.yaml`, `files/r2-netplan.yaml`), for example:
+Each provider has a **routing table ID** and a **default route** on the correct interface. I define those with **netplan** on each router (separate from Router Sync), for example:
 
 ```yaml
 enp1s0:
@@ -148,19 +148,17 @@ Three KV buckets:
 
 If R1’s agent restarts, it reconnects, reinstalls the suppress rule, resyncs all policies, and resumes heartbeats. The API never needs direct SSH to the routers for read-only status.
 
-## Deployment with Ansible
+## Deployment overview
 
-From the `home-router` repo:
+Router Sync does not ship infrastructure-as-code. You bring your own orchestration (Docker Compose, systemd, Kubernetes, etc.). A typical rollout:
 
-```bash
-make env
-cp group_vars/secrets.yml.example group_vars/secrets.yml   # NATS credentials
+1. **Netplan (or equivalent)** on each router — per-uplink routing tables and default routes.
+2. **NATS** on a central host with JetStream enabled and credentials configured.
+3. **API** — one `router-sync --mode=api` instance pointing at NATS.
+4. **Agents** — one `router-sync --mode=agent` per router (`host` network, `NET_ADMIN`, `agent.hostname` matching provider `interfaces` keys).
+5. **UI** — `router-sync-ui` container with `ROUTER_SYNC_API_URL` set to the API.
 
-make r2-routing-stack-full
-# NATS + image build + API + agents on r1/r2 + UI
-```
-
-Individual targets: `make r2-router-sync-api`, `make routers-router-sync-agent`, `make r2-router-sync-ui`.
+See [README.md — Production deployment](README.md#production-deployment) for netplan and `docker run` examples.
 
 ## Monitoring
 
@@ -187,7 +185,6 @@ Router Sync turns multi-ISP routing from a fragile, per-router shell script into
 - [README.md](README.md) — install, API, configuration
 - [ARCHITECTURE.md](ARCHITECTURE.md) — components, diagrams, data flows
 - [web/README.md](web/README.md) — UI development and Docker
-- [home-router](https://github.com/yourusername/home-router) — Ansible playbooks and netplan
 
 ---
 
