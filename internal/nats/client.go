@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -31,9 +32,10 @@ type NATSClient interface {
 
 // Client represents a NATS client with key-value store capabilities
 type Client struct {
-	conn *nats.Conn
-	js   nats.JetStreamContext
-	kv   nats.KeyValue
+	conn     *nats.Conn
+	js       nats.JetStreamContext
+	kv       nats.KeyValue
+	writerID string
 }
 
 // sanitizeKey sanitizes a key to be compatible with NATS key-value store
@@ -103,10 +105,16 @@ func NewClient(cfg config.NATSConfig) (*Client, error) {
 		}
 	}
 
+	writerID := cfg.WriterID
+	if writerID == "" {
+		writerID = cfg.ClientID
+	}
+
 	client := &Client{
-		conn: conn,
-		js:   js,
-		kv:   kv,
+		conn:     conn,
+		js:       js,
+		kv:       kv,
+		writerID: writerID,
 	}
 
 	// Test the key-value store
@@ -126,23 +134,23 @@ func (c *Client) Close() {
 	}
 }
 
-// StoreProvider stores an internet provider in the key-value store
+// StoreProvider stores an internet provider in the key-value store using revision CAS.
 func (c *Client) StoreProvider(provider *models.InternetProvider) error {
-	data, err := provider.ToJSON()
-	if err != nil {
-		return fmt.Errorf("failed to marshal provider: %w", err)
-	}
-
 	key := fmt.Sprintf("providers.%s", sanitizeKey(provider.ID))
 	logrus.Debugf("Storing provider with key: %s (original ID: %s)", key, provider.ID)
 
-	_, err = c.kv.Put(key, data)
-	if err != nil {
-		return fmt.Errorf("failed to store provider: %w", err)
-	}
-
-	logrus.Debugf("Stored provider %s", provider.ID)
-	return nil
+	return c.storeWithCAS(key, func(existing []byte) ([]byte, error) {
+		var prev *models.InternetProvider
+		if len(existing) > 0 {
+			var parsed models.InternetProvider
+			if err := parsed.FromJSON(existing); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal existing provider: %w", err)
+			}
+			prev = &parsed
+		}
+		PrepareProviderWrite(provider, prev, c.writerID)
+		return provider.ToJSON()
+	})
 }
 
 // GetProvider retrieves an internet provider from the key-value store
@@ -217,21 +225,66 @@ func (c *Client) DeleteProvider(id string) error {
 	return nil
 }
 
-// StorePolicy stores a routing policy in the key-value store
+// StorePolicy stores a routing policy in the key-value store using revision CAS.
 func (c *Client) StorePolicy(policy *models.RoutingPolicy) error {
-	data, err := policy.ToJSON()
-	if err != nil {
-		return fmt.Errorf("failed to marshal policy: %w", err)
-	}
-
 	key := fmt.Sprintf("policies.%s", sanitizeKey(policy.ID))
-	_, err = c.kv.Put(key, data)
-	if err != nil {
-		return fmt.Errorf("failed to store policy: %w", err)
-	}
 
-	logrus.Debugf("Stored policy %s", policy.ID)
-	return nil
+	return c.storeWithCAS(key, func(existing []byte) ([]byte, error) {
+		var prev *models.RoutingPolicy
+		if len(existing) > 0 {
+			var parsed models.RoutingPolicy
+			if err := parsed.FromJSON(existing); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal existing policy: %w", err)
+			}
+			prev = &parsed
+		}
+		PreparePolicyWrite(policy, prev, c.writerID)
+		return policy.ToJSON()
+	})
+}
+
+const maxCASRetries = 5
+
+// storeWithCAS writes a KV entry using JetStream revision compare-and-swap.
+func (c *Client) storeWithCAS(key string, build func(existing []byte) ([]byte, error)) error {
+	var lastErr error
+	for attempt := 0; attempt < maxCASRetries; attempt++ {
+		entry, err := c.kv.Get(key)
+		if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+			return fmt.Errorf("failed to read key %s: %w", key, err)
+		}
+
+		var existing []byte
+		var revision uint64
+		if err == nil {
+			existing = entry.Value()
+			revision = entry.Revision()
+		}
+
+		data, err := build(existing)
+		if err != nil {
+			return err
+		}
+
+		if revision == 0 {
+			_, err = c.kv.Create(key, data)
+		} else {
+			_, err = c.kv.Update(key, data, revision)
+		}
+		if err == nil {
+			logrus.Debugf("Stored key %s (attempt %d)", key, attempt+1)
+			return nil
+		}
+		if errors.Is(err, nats.ErrKeyExists) || errors.Is(err, nats.ErrKeyNotFound) {
+			lastErr = err
+			continue
+		}
+		return fmt.Errorf("failed to store key %s: %w", key, err)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("failed to store key %s after %d attempts: %w", key, maxCASRetries, lastErr)
+	}
+	return fmt.Errorf("failed to store key %s after %d attempts", key, maxCASRetries)
 }
 
 // GetPolicy retrieves a routing policy from the key-value store

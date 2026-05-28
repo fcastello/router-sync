@@ -1,11 +1,13 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"router-sync/internal/models"
+	natsclient "router-sync/internal/nats"
 
 	"github.com/gin-gonic/gin"
 )
@@ -124,10 +126,7 @@ func (s *Server) createProvider(c *gin.Context) {
 	}
 
 	if err := s.natsClient.StoreProvider(provider); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to create provider",
-			"details": err.Error(),
-		})
+		writeStoreError(c, "Failed to create provider", err)
 		return
 	}
 
@@ -244,10 +243,7 @@ func (s *Server) updateProvider(c *gin.Context) {
 	}
 
 	if err := s.natsClient.StoreProvider(existing); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to update provider",
-			"details": err.Error(),
-		})
+		writeStoreError(c, "Failed to update provider", err)
 		return
 	}
 
@@ -350,10 +346,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 	}
 
 	if err := s.natsClient.StorePolicy(policy); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to create policy",
-			"details": err.Error(),
-		})
+		writeStoreError(c, "Failed to create policy", err)
 		return
 	}
 
@@ -447,10 +440,7 @@ func (s *Server) updatePolicy(c *gin.Context) {
 	}
 
 	if err := s.natsClient.StorePolicy(existing); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to update policy",
-			"details": err.Error(),
-		})
+		writeStoreError(c, "Failed to update policy", err)
 		return
 	}
 
@@ -480,4 +470,18 @@ func (s *Server) deletePolicy(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+func writeStoreError(c *gin.Context, message string, err error) {
+	if errors.Is(err, natsclient.ErrConflict) {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   message,
+			"details": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{
+		"error":   message,
+		"details": err.Error(),
+	})
 }

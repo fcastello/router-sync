@@ -1,22 +1,19 @@
-# Router Sync Configuration
+# Router Sync Configuration (defaults; production uses Ansible-managed file)
 
-# Log level (debug, info, warn, error)
-log_level: info
+log_level: warn
 
-# NATS configuration
 nats:
   urls:
-    - "nats://localhost:4222"
+    - "nats://127.0.0.1:4222"
   username: ""
   password: ""
   token: ""
   cluster_id: "router-sync-cluster"
   client_id: "router-sync-client"
+  writer_id: "local"
 
-# API server configuration
 api:
-  address: ":8081"
+  address: ":18080"
 
-# Synchronization configuration
 sync:
-  interval: 30s 
+  interval: 30s

@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 248 250 252;
+  --foreground: 15 23 42;
+  --card: 255 255 255;
+  --border: 226 232 240;
+  --primary: 37 99 235;
+  --muted: 241 245 249;
+  --muted-foreground: 100 116 139;
+  --success: 22 163 74;
+  --destructive: 220 38 38;
+}
+
+body {
+  @apply bg-[rgb(var(--background))] text-[rgb(var(--foreground))] antialiased;
+  margin: 0;
+  min-height: 100vh;
+}

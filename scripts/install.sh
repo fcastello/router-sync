@@ -157,7 +157,7 @@ create_default_config() {
 # Router Sync Configuration
 
 # Log level (debug, info, warn, error)
-log_level: info
+log_level: warn
 
 # NATS configuration
 nats:

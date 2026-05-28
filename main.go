@@ -11,9 +11,12 @@ import (
 
 	"router-sync/internal/api"
 	"router-sync/internal/config"
+	"router-sync/internal/logging"
 	"router-sync/internal/nats"
 	"router-sync/internal/router"
 	"router-sync/internal/sync"
+
+	_ "router-sync/docs" // register Swagger doc.json
 
 	"github.com/sirupsen/logrus"
 )
@@ -27,8 +30,8 @@ var (
 // @title Router Sync API
 // @version 1.0
 // @description Router synchronization service for managing internet providers and routing policies
-// @host localhost:8080
-// @BasePath /api/v1
+// @host localhost:18080
+// @BasePath /
 func main() {
 	var configPath string
 	flag.StringVar(&configPath, "config", "config.yaml", "Path to configuration file")
@@ -40,8 +43,8 @@ func main() {
 		logrus.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Setup logging
-	logrus.SetLevel(cfg.LogLevel)
+	// Setup logging (runtime level can be changed via API)
+	logging.Init(cfg.LogLevel)
 	logrus.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})

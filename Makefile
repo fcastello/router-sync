@@ -214,6 +214,20 @@ docker-build:
 docker-run:
 	docker run --rm -it --network host -v $(PWD)/config.yaml:/app/config.yaml router-sync:latest
 
+# Web UI
+ui-install:
+	cd web && npm install
+
+ui-dev:
+	cd web && npm run dev
+
+ui-build:
+	cd web && npm run build
+
+ui-docker-build:
+	docker build -t router-sync-ui:$(VERSION) ./web
+	docker tag router-sync-ui:$(VERSION) router-sync-ui:latest
+
 # Help
 help:
 	@echo "Available targets:"
@@ -249,6 +263,10 @@ help:
 	@echo "  run-debug    - Run with debug logging"
 	@echo "  docker-build - Build Docker image"
 	@echo "  docker-run   - Run Docker container"
+	@echo "  ui-install   - Install web UI dependencies"
+	@echo "  ui-dev       - Run web UI dev server"
+	@echo "  ui-build     - Build web UI static assets"
+	@echo "  ui-docker-build - Build router-sync-ui Docker image"
 	@echo "  help         - Show this help"
 
-.PHONY: all build build-all clean test test-coverage test-race bench deps tidy docs install-tools lint fmt vet check version version-bump-patch version-bump-minor version-bump-major changelog changelog-preview release-prepare release release-github release-full release-workflow install uninstall run run-debug docker-build docker-run help 
+.PHONY: all build build-all clean test test-coverage test-race bench deps tidy docs install-tools lint fmt vet check version version-bump-patch version-bump-minor version-bump-major changelog changelog-preview release-prepare release release-github release-full release-workflow install uninstall run run-debug docker-build docker-run ui-install ui-dev ui-build ui-docker-build help 

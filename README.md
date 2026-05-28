@@ -16,6 +16,17 @@ A Go-based router synchronization service that manages internet providers and ro
 - **Persistent Storage**: Configuration survives reboots and power outages
 - **Docker Support**: Containerized deployment with Docker
 - **Graceful Shutdown**: Proper cleanup of routing rules on service termination
+- **Web UI**: Standalone dashboard in [`web/`](web/) (Vite + React), deployable separately from the API
+
+## Web UI
+
+See [`web/README.md`](web/README.md). Quick start:
+
+```bash
+make ui-install
+make ui-dev          # proxies API to :18080
+make ui-docker-build # nginx image; set ROUTER_SYNC_API_URL at run time
+```
 
 ## Architecture
 
@@ -159,7 +170,7 @@ Create a `config.yaml` file in the same directory as the binary:
 # Router Sync Configuration
 
 # Log level (debug, info, warn, error)
-log_level: info
+log_level: warn
 
 # NATS configuration
 nats:

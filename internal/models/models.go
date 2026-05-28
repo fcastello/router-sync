@@ -15,6 +15,8 @@ type InternetProvider struct {
 	TableID     int       `json:"table_id" yaml:"table_id"`
 	Gateway     string    `json:"gateway" yaml:"gateway"`
 	Description string    `json:"description,omitempty" yaml:"description,omitempty"`
+	Generation  uint64    `json:"generation" yaml:"generation"`
+	WriterID    string    `json:"writer_id" yaml:"writer_id"`
 	CreatedAt   time.Time `json:"created_at" yaml:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" yaml:"updated_at"`
 }
@@ -26,6 +28,8 @@ type RoutingPolicy struct {
 	ProviderID  string    `json:"provider_id" yaml:"provider_id"`
 	Description string    `json:"description,omitempty" yaml:"description,omitempty"`
 	Enabled     bool      `json:"enabled" yaml:"enabled"`
+	Generation  uint64    `json:"generation" yaml:"generation"`
+	WriterID    string    `json:"writer_id" yaml:"writer_id"`
 	CreatedAt   time.Time `json:"created_at" yaml:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" yaml:"updated_at"`
 }

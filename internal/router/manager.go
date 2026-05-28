@@ -134,11 +134,6 @@ func (m *Manager) SetupPolicy(policy *models.RoutingPolicy, provider *models.Int
 			logrus.Warnf("Failed to remove rules for disabled policy %s: %v", policy.Name, err)
 		}
 
-		// Clear conntrack entries for this source network
-		if err := m.clearConntrack(srcNet); err != nil {
-			logrus.Warnf("Failed to clear conntrack entries for disabled policy %s: %v", policy.Name, err)
-		}
-
 		logrus.Debugf("Successfully disabled policy %s", policy.Name)
 		return nil
 	}
@@ -575,6 +570,14 @@ func (m *Manager) clearConntrack(srcNet *net.IPNet) error {
 	if err != nil {
 		// It's okay if there are no entries to delete
 		logrus.Debugf("Conntrack clear result for %s: %s", srcNet.String(), string(output))
+		return nil
+	}
+
+	// conntrack exits 0 even when nothing is deleted (e.g. "0 flow entries have been deleted").
+	// Avoid noisy INFO logs during periodic sync when policies are disabled/removed.
+	out := strings.ToLower(string(output))
+	if strings.Contains(out, "0 flow") || strings.Contains(out, "0 entries") {
+		logrus.Debugf("No conntrack entries to clear for source %s", srcNet.String())
 		return nil
 	}
 

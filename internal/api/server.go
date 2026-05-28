@@ -7,7 +7,9 @@ import (
 	"net/url"
 	"time"
 
+	"router-sync/docs"
 	"router-sync/internal/config"
+	"router-sync/internal/logging"
 	"router-sync/internal/nats"
 	"router-sync/internal/router"
 	"router-sync/internal/sync"
@@ -94,6 +96,7 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, routerManager *
 	// Set up Gin router
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(corsMiddleware())
 	router.Use(server.metricsMiddleware())
 	router.Use(server.urlDecodeMiddleware())
 
@@ -126,9 +129,16 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, routerManager *
 		// Sync endpoints
 		v1.POST("/sync", server.triggerSync)
 		v1.GET("/stats", server.getStats)
+
+		// Runtime logging
+		v1.GET("/logging/level", server.getLogLevel)
+		v1.PUT("/logging/level", server.setLogLevel)
 	}
 
-	// Swagger documentation
+	// Swagger: empty Host so the UI uses the browser's host:port (e.g. 192.168.2.252:18080)
+	docs.SwaggerInfo.Host = ""
+	docs.SwaggerInfo.BasePath = "/"
+	docs.SwaggerInfo.Schemes = []string{"http"}
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Prometheus metrics
@@ -154,6 +164,20 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the API server
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
+}
+
+// corsMiddleware allows the standalone web UI (separate origin/port) to call the API.
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
 }
 
 // metricsMiddleware adds Prometheus metrics middleware
@@ -251,6 +275,7 @@ func (s *Server) getStats(c *gin.Context) {
 	stats := gin.H{
 		"sync":       syncStats,
 		"router":     routerStats,
+		"log_level":  logging.GetLevelName(),
 		"timestamp":  time.Now().UTC(),
 		"version":    s.version,
 		"build_time": s.buildTime,

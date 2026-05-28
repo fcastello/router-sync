@@ -1,56 +1,38 @@
 # Build stage
 FROM golang:1.21-alpine AS builder
 
-# Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
-# Set working directory
 WORKDIR /app
 
-# Copy go mod files
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
-# Copy source code
 COPY . .
 
-# Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o router-sync main.go
 
-# Final stage
-FROM alpine:latest
+# Final stage — host network + NET_ADMIN; needs ip/conntrack on the host namespace
+FROM alpine:3.20
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata
+RUN apk --no-cache add \
+    ca-certificates \
+    tzdata \
+    iproute2 \
+    conntrack-tools \
+    wget
 
-# Create non-root user
-RUN addgroup -g 1001 -S router-sync && \
-    adduser -u 1001 -S router-sync -G router-sync
-
-# Set working directory
 WORKDIR /app
 
-# Copy binary from builder stage
 COPY --from=builder /app/router-sync .
 
-# Copy configuration file
-COPY config.yaml .
+# Default config is overridden by Ansible bind-mount at /etc/router-sync/config.yaml
+COPY config.yaml /etc/router-sync/config.yaml
 
-# Change ownership to non-root user
-RUN chown -R router-sync:router-sync /app
+EXPOSE 18080
 
-# Switch to non-root user
-USER router-sync
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:18080/health || exit 1
 
-# Expose port
-EXPOSE 8080
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
-
-# Run the application
 ENTRYPOINT ["./router-sync"]
-CMD ["-config", "config.yaml"] 
+CMD ["-config", "/etc/router-sync/config.yaml"]
