@@ -65,7 +65,7 @@ tidy:
 
 # Generate API documentation
 docs:
-	swag init
+	swag init -g cmd/router-sync/main.go -o docs
 
 # Install development tools
 install-tools:

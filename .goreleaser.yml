@@ -1,10 +1,11 @@
 before:
   hooks:
     - go mod tidy
-    - swag init
+    - swag init -g cmd/router-sync/main.go -o docs
 
 builds:
-  - env:
+  - main: ./cmd/router-sync
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
