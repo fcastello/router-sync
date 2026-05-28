@@ -9,12 +9,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Mode selects the runtime role of the binary.
+type Mode string
+
+const (
+	// ModeAPI runs only the HTTP API on the configured address.
+	ModeAPI Mode = "api"
+	// ModeAgent runs the router-local agent (NET_ADMIN) that applies policies
+	// and reports state back to NATS.
+	ModeAgent Mode = "agent"
+)
+
 // Config represents the application configuration
 type Config struct {
+	Mode     Mode         `yaml:"mode"`
 	LogLevel logrus.Level `yaml:"log_level"`
 	NATS     NATSConfig   `yaml:"nats"`
 	API      APIConfig    `yaml:"api"`
 	Sync     SyncConfig   `yaml:"sync"`
+	Agent    AgentConfig  `yaml:"agent"`
 }
 
 // NATSConfig represents NATS connection configuration
@@ -38,12 +51,27 @@ type SyncConfig struct {
 	Interval time.Duration `yaml:"interval"`
 }
 
+// AgentConfig represents agent-mode configuration.
+//
+// Hostname identifies this agent inside NATS (defaults to os.Hostname()).
+// MetricsAddress is the listener for /health and /metrics on the agent.
+// StatePublishInterval is how often the agent publishes RouterState to NATS.
+type AgentConfig struct {
+	Hostname             string        `yaml:"hostname"`
+	MetricsAddress       string        `yaml:"metrics_address"`
+	StatePublishInterval time.Duration `yaml:"state_publish_interval"`
+}
+
 // Load loads configuration from file and applies environment overrides.
 //
 // Environment variables (optional):
+//   - ROUTER_SYNC_MODE                  (api|agent)
 //   - ROUTER_SYNC_LOG_LEVEL
 //   - ROUTER_SYNC_API_ADDRESS
-//   - ROUTER_SYNC_NATS_URL (comma-separated for multiple URLs)
+//   - ROUTER_SYNC_AGENT_HOSTNAME
+//   - ROUTER_SYNC_AGENT_METRICS_ADDRESS
+//   - ROUTER_SYNC_AGENT_STATE_INTERVAL  (Go duration: 5s, 1m...)
+//   - ROUTER_SYNC_NATS_URL              (comma-separated for multiple URLs)
 //   - ROUTER_SYNC_NATS_USERNAME
 //   - ROUTER_SYNC_NATS_PASSWORD
 //   - ROUTER_SYNC_NATS_TOKEN
@@ -67,6 +95,9 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(config *Config) {
+	if config.Mode == "" {
+		config.Mode = ModeAPI
+	}
 	if config.API.Address == "" {
 		config.API.Address = ":18080"
 	}
@@ -82,9 +113,23 @@ func applyDefaults(config *Config) {
 	if config.NATS.WriterID == "" {
 		config.NATS.WriterID = config.NATS.ClientID
 	}
+	if config.Agent.MetricsAddress == "" {
+		config.Agent.MetricsAddress = ":18082"
+	}
+	if config.Agent.StatePublishInterval == 0 {
+		config.Agent.StatePublishInterval = 5 * time.Second
+	}
+	if config.Agent.Hostname == "" {
+		if hn, err := os.Hostname(); err == nil {
+			config.Agent.Hostname = hn
+		}
+	}
 }
 
 func applyEnvOverrides(config *Config) {
+	if v := os.Getenv("ROUTER_SYNC_MODE"); v != "" {
+		config.Mode = Mode(strings.ToLower(strings.TrimSpace(v)))
+	}
 	if v := os.Getenv("ROUTER_SYNC_LOG_LEVEL"); v != "" {
 		if level, err := logrus.ParseLevel(v); err == nil {
 			config.LogLevel = level
@@ -92,6 +137,17 @@ func applyEnvOverrides(config *Config) {
 	}
 	if v := os.Getenv("ROUTER_SYNC_API_ADDRESS"); v != "" {
 		config.API.Address = v
+	}
+	if v := os.Getenv("ROUTER_SYNC_AGENT_HOSTNAME"); v != "" {
+		config.Agent.Hostname = v
+	}
+	if v := os.Getenv("ROUTER_SYNC_AGENT_METRICS_ADDRESS"); v != "" {
+		config.Agent.MetricsAddress = v
+	}
+	if v := os.Getenv("ROUTER_SYNC_AGENT_STATE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			config.Agent.StatePublishInterval = d
+		}
 	}
 	if v := os.Getenv("ROUTER_SYNC_NATS_URL"); v != "" {
 		parts := strings.Split(v, ",")

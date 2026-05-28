@@ -6,6 +6,8 @@ import type {
   HealthResponse,
   InternetProvider,
   LogLevelResponse,
+  LogLevelsResponse,
+  RouterState,
   RoutingPolicy,
   SetLogLevelRequest,
   StatsResponse,
@@ -89,6 +91,24 @@ export const api = {
       method: "DELETE",
     }),
 
+  listRouters: () => request<RouterState[]>("/api/v1/routers"),
+  getRouter: (hostname: string) =>
+    request<RouterState>(`/api/v1/routers/${encodeURIComponent(hostname)}`),
+
+  getOwnLogLevel: () => request<LogLevelResponse>("/api/v1/logging/level"),
+  setOwnLogLevel: (body: SetLogLevelRequest) =>
+    request<LogLevelResponse>("/api/v1/logging/level", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  listLogLevels: () => request<LogLevelsResponse>("/api/v1/logging/levels"),
+  setServiceLogLevel: (serviceId: string, body: SetLogLevelRequest) =>
+    request<LogLevelResponse>(
+      `/api/v1/logging/level/${encodeURIComponent(serviceId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+
+  // Legacy aliases (kept so older Settings code keeps working).
   getLogLevel: () => request<LogLevelResponse>("/api/v1/logging/level"),
   setLogLevel: (body: SetLogLevelRequest) =>
     request<LogLevelResponse>("/api/v1/logging/level", {

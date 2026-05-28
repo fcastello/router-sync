@@ -1,380 +1,194 @@
-# Router Sync: Simplifying Multi-ISP Routing in High Availability Home Networks
+# Router Sync: Multi-ISP Policy Routing with a Split API, Agents, and a Web UI
 
 ## Introduction
 
-In today's connected world, having reliable internet connectivity is crucial. Many households and small businesses are turning to multi-ISP setups to ensure redundancy and optimize bandwidth usage. However, managing routing across multiple internet service providers can be complex, especially when you need to route specific devices or network segments through different ISPs.
+Home networks with more than one internet uplink need more than a default route: you want specific devices or subnets to use Starlink, others on fiber, and everything to keep working when you fail over between two Linux routers. Doing that by hand with `ip rule` and separate routing tables on **each** router does not scale.
 
-This is where **Router Sync** comes in - a powerful, open-source solution that simplifies policy-based routing across multiple routers in a high-availability environment.
+**Router Sync** is an open-source stack that centralizes provider and policy configuration in **NATS JetStream**, exposes a **REST API** and **web UI** on one host, and runs a lightweight **agent** on every router that applies policy rules locally and reports live kernel state back.
 
-## The Problem: Complex Multi-ISP Routing
+## My setup
 
-### My Home Network Setup
+Two Ubuntu routers (**R1** and **R2**) share LAN duties. **R2** also runs:
 
-I run a sophisticated home network with two Linux routers configured for high availability, connected to multiple internet service providers. Here's what my setup looks like:
+- **NATS** (source of truth)
+- **router-sync API** (`--mode=api`, port 18080)
+- **router-sync UI** (port 18081)
+
+Each router runs **router-sync agent** (`--mode=agent`, host network, NET_ADMIN) and three uplinks mapped to routing tables **99** (Telecom), **100** (Starlink), and **200** (Tuenti).
 
 ```
-                    ┌─────────────────┐    ┌─────────────────┐
-                    │   Router 1      │    │   Router 2      │
-                    │   (Primary)     │    │   (Secondary)   │
-                    │                 │    │                 │
-                    │ ┌─────────────┐ │    │ ┌─────────────┐ │
-                    │ │ Router Sync │ │    │ │ Router Sync │ │
-                    │ │   Service   │ │    │ │   Service   │ │
-                    │ └─────────────┘ │    │ └─────────────┘ │
-                    └─────────────────┘    └─────────────────┘
-                             │                       │
-                    ┌────────┴────────┐    ┌────────┴────────┐
-                    │                 │    │                 │
-                    │  ISP 1 (Fiber)  │    │  ISP 2 (Cable)  │
-                    │                 │    │                 │
-                    └─────────────────┘    └─────────────────┘
-                             │                       │
-                    ┌────────┴────────┐    ┌────────┴────────┐
-                    │                 │    │                 │
-                    │  ISP 3 (4G)     │    │  ISP 4 (Starlink)│
-                    │                 │    │                 │
-                    └─────────────────┘    └─────────────────┘
+  Browser ──► UI :18081 ──► API :18080 ──► NATS :4222
+                              ▲              ▲
+                              │              │
+                         Agent R1       Agent R2
+                         ip rule        ip rule
+                         tables         tables
+                         (netplan)      (netplan)
 ```
 
-### The Challenges I Faced
+## What changed in the architecture
 
-Before implementing Router Sync, I encountered several challenges:
+Earlier versions ran a single service on each router that both served HTTP and touched the kernel. The current design separates concerns:
 
-1. **Manual Configuration**: Every time I wanted to route a device through a different ISP, I had to manually configure routing rules on both routers
-2. **Configuration Drift**: Keeping routing policies synchronized between routers was error-prone
-3. **Complex Failover**: When one router failed, I had to manually reconfigure routing on the backup router
-4. **No Centralized Management**: There was no single source of truth for routing policies
-5. **Time-Consuming Changes**: Adding new devices or changing routing policies required manual intervention on multiple systems
+| Role | Runs where | Touches kernel? |
+|------|------------|-----------------|
+| API | R2 | No |
+| Agent | R1 + R2 | Yes (`ip rule`, state collection) |
+| UI | R2 | No |
 
-## The Solution: Router Sync
+One Docker image, one binary: `router-sync --mode=api` or `--mode=agent`.
 
-Router Sync is a Go-based service that manages internet providers and routing policies using NATS.io as the source of truth. It enables policy-based routing across multiple routers in a LAN environment with automatic synchronization.
+## How routing actually works
 
-### Key Features
+### Routing tables (netplan)
 
-- **Internet Provider Management**: Add, remove, and manage internet service providers with their associated network interfaces and routing tables
-- **Policy-Based Routing**: Create routing policies based on source IP addresses (single IP or CIDR notation)
-- **NATS.io Integration**: Uses NATS.io key-value store for persistent configuration storage
-- **Real-time Synchronization**: Automatic synchronization between NATS KV store and router configuration
-- **REST API**: Full CRUD operations for providers and policies
-- **High Availability**: Works seamlessly across multiple routers
-- **Graceful Shutdown**: Proper cleanup of routing rules on service termination
-
-## Real-World Usage Scenarios
-
-### Scenario 1: Device-Specific Routing
-
-I have several IoT devices that need to use different ISPs for various reasons:
-
-```bash
-# Route my security cameras through the most stable ISP (Fiber)
-curl -X POST http://router1:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Security Cameras",
-    "source_ip": "192.168.1.100",
-    "provider_id": "Fiber-ISP",
-    "description": "Route security cameras through fiber for stability",
-    "enabled": true
-  }'
-
-# Route my gaming PC through the lowest latency ISP (Cable)
-curl -X POST http://router1:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Gaming PC",
-    "source_ip": "192.168.1.50",
-    "provider_id": "Cable-ISP",
-    "description": "Route gaming PC through cable for low latency",
-    "enabled": true
-  }'
-
-# Route my work laptop through the backup ISP (4G) for redundancy
-curl -X POST http://router1:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Work Laptop",
-    "source_ip": "192.168.1.25",
-    "provider_id": "4G-ISP",
-    "description": "Route work laptop through 4G for redundancy",
-    "enabled": true
-  }'
-```
-
-### Scenario 2: Subnet-Based Routing
-
-I also use CIDR notation to route entire network segments:
-
-```bash
-# Route all devices in the guest network through Starlink
-curl -X POST http://router1:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Guest Network",
-    "source_ip": "192.168.2.0/24",
-    "provider_id": "Starlink-ISP",
-    "description": "Route guest network through Starlink",
-    "enabled": true
-  }'
-
-# Route IoT devices subnet through the most stable connection
-curl -X POST http://router1:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "IoT Network",
-    "source_ip": "192.168.3.0/25",
-    "provider_id": "Fiber-ISP",
-    "description": "Route IoT devices through fiber for stability",
-    "enabled": true
-  }'
-```
-
-### Scenario 3: Dynamic ISP Switching
-
-One of the most powerful features is the ability to quickly switch ISPs for specific devices:
-
-```bash
-# Switch my streaming device from Cable to Fiber for better bandwidth
-curl -X PUT http://router1:8081/api/v1/policies/192.168.1.75 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Streaming Device",
-    "source_ip": "192.168.1.75",
-    "provider_id": "Fiber-ISP",
-    "description": "Streaming device now using fiber for better bandwidth",
-    "enabled": true
-  }'
-```
-
-## High Availability Benefits
-
-### Automatic Failover
-
-When Router 1 fails, Router 2 automatically takes over with the same routing policies:
-
-1. **NATS as Source of Truth**: All routing policies are stored in NATS.io KV store
-2. **Automatic Sync**: Router 2's Router Sync service automatically syncs all policies
-3. **Zero Configuration**: No manual intervention required during failover
-4. **Consistent State**: Both routers maintain identical routing configurations
-
-### Configuration Synchronization
-
-```bash
-# Check current policies on Router 1
-curl http://router1:8081/api/v1/policies
-
-# Check current policies on Router 2 (should be identical)
-curl http://router2:8081/api/v1/policies
-
-# Both return the same policies, ensuring consistency
-```
-
-## Installation and Setup
-
-### Quick Start with Docker
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/router-sync.git
-cd router-sync
-
-# Build and run with Docker
-make docker-build
-make docker-run
-```
-
-### Linux Installation (Systemd Service)
-
-For production deployments on Linux routers:
-
-```bash
-# Download the latest release
-wget https://github.com/yourusername/router-sync/releases/latest/download/router-sync-v<VERSION>-linux-amd64.tar.gz
-
-# Extract and install
-tar -xzf router-sync-v<VERSION>-linux-amd64.tar.gz
-cd router-sync-v<VERSION>-linux-amd64
-sudo ./install.sh
-```
-
-The installation script automatically:
-- Creates a dedicated system user
-- Installs the binary to `/usr/local/bin/`
-- Creates configuration directory at `/etc/router-sync/`
-- Installs and enables the systemd service
-- Starts the service automatically
-
-## Configuration Example
-
-Here's my actual configuration file:
+Each provider has a **routing table ID** and a **default route** on the correct interface. On my network that is defined in Ansible-managed netplan (`files/r1-netplan.yaml`, `files/r2-netplan.yaml`), for example:
 
 ```yaml
-# Router Sync Configuration
-log_level: info
-
-# NATS configuration
-nats:
-  urls:
-    - "nats://192.168.1.10:4222"  # My NATS server
-  username: "router-sync"
-  password: "secure-password"
-  cluster_id: "home-network"
-  client_id: "router-sync-router1"
-
-# API server configuration
-api:
-  address: ":8081"
-
-# Synchronization configuration
-sync:
-  interval: 30s
+enp1s0:
+  dhcp4: true
+  routes:
+    - to: default
+      via: 192.168.4.1
+      metric: 100
+      table: 99
+      on-link: true
 ```
 
-## Monitoring and Management
+Starlink and Tuenti use tables 100 and 200 on `enp2s0` and `enp3s0`. The agent does **not** install these table routes today; netplan owns them.
 
-### API Endpoints
+### Policy rules (agent)
 
-Router Sync provides a comprehensive REST API:
+When I enable a policy for `192.168.2.25` → Telecom, each agent adds:
 
-```bash
-# Health check
-curl http://router1:8081/health
-
-# List all providers
-curl http://router1:8081/api/v1/providers
-
-# List all policies
-curl http://router1:8081/api/v1/policies
-
-# Get system statistics
-curl http://router1:8081/api/v1/stats
-
-# Trigger manual sync
-curl -X POST http://router1:8081/api/v1/sync
+```text
+2000: from 192.168.2.25 lookup 99
 ```
 
-### Prometheus Metrics
+Disabled policies remove their rules. Changes propagate in a few seconds via NATS watchers (`policies.>` so IDs like `192.168.2.0/25` work).
 
-The service exposes comprehensive metrics for monitoring:
+### The suppress-default rule
 
-```bash
-# View metrics
-curl http://router1:8081/metrics
+Without extra care, policy routing can steal traffic that should stay on the LAN. On agent start, Router Sync installs (if missing):
+
+```text
+10: from all lookup main suppress_prefixlength 0
 ```
 
-Key metrics include:
-- `http_requests_total`: Total HTTP requests by method, endpoint, and status
-- `http_request_duration_seconds`: HTTP request duration
-- `providers_total`: Total number of internet providers
-- `policies_total`: Total number of routing policies
+Local subnets stay in the **main** table; only traffic that would use the default route continues to the per-source policy rules. The agent removes this rule on clean shutdown.
 
-## Real-World Benefits
+## Per-router interface names
 
-### Before Router Sync
+The same logical provider can use different interface names on each router. In the API and UI:
 
-- **Manual Configuration**: 15-20 minutes to add a new device to a different ISP
-- **Error-Prone**: Frequent configuration mistakes leading to connectivity issues
-- **No Consistency**: Routers often had different routing states
-- **Complex Failover**: Manual intervention required during router failures
-- **No Monitoring**: No visibility into routing policy status
+```json
+{
+  "name": "Telecom",
+  "interfaces": { "r1": "enp1s0", "r2": "enp1s0" },
+  "table_id": 99,
+  "gateway": "192.168.4.1"
+}
+```
 
-### After Router Sync
+The Providers page shows one input per router that is currently reporting state. Missing mappings get a warning.
 
-- **Instant Changes**: New routing policies applied in seconds via API
-- **Zero Errors**: Automated configuration eliminates human error
-- **Perfect Consistency**: NATS ensures both routers are always in sync
-- **Automatic Failover**: Seamless failover with no manual intervention
-- **Full Monitoring**: Complete visibility into routing policy status and health
+## Web UI
 
-## Advanced Use Cases
+The UI is a separate container so you can redeploy the frontend without touching agents.
 
-### Load Balancing
+| Page | What you see |
+|------|----------------|
+| **Dashboard** | API health, router cards, traffic allocation (enabled policies only), recent policies |
+| **Routers** | Live interfaces, **all** routing tables (main + Telecom/Starlink/Tuenti), IP rules |
+| **Policies** | Enable/disable, assign provider |
+| **Providers** | Uplinks with per-router interfaces |
+| **Settings** | API URL, log level per service (`api`, `agent.r1`, `agent.r2`) |
 
-While Router Sync doesn't provide load balancing directly, you can implement it by creating multiple policies for the same device and enabling/disabling them based on load:
+Open the UI at **http://192.168.2.252:18081**. The API at **:18080** returns JSON only — a browser visit to `:18080/` shows `404`, which is expected.
+
+## Example workflow
+
+**1. Define providers** (once):
 
 ```bash
-# Enable backup ISP for a device when primary is congested
-curl -X PUT http://router1:8081/api/v1/policies/192.168.1.100 \
-  -H "Content-Type: application/json" \
+curl -X POST http://192.168.2.252:18080/api/v1/providers \
+  -H 'Content-Type: application/json' \
   -d '{
-    "name": "Load Balanced Device",
-    "source_ip": "192.168.1.100",
-    "provider_id": "Backup-ISP",
-    "description": "Using backup ISP due to primary congestion",
+    "name": "Starlink",
+    "interfaces": {"r1": "enp2s0", "r2": "enp2s0"},
+    "table_id": 100,
+    "gateway": "192.168.3.1"
+  }'
+```
+
+**2. Route one laptop through Starlink:**
+
+```bash
+curl -X PUT http://192.168.2.252:18080/api/v1/policies/192.168.2.24 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Pancho2",
+    "source_ip": "192.168.2.24",
+    "provider_id": "Starlink",
     "enabled": true
   }'
 ```
 
-### Geographic Routing
+Within seconds, both agents install the rule; the Routers page shows it under IP rules and the dashboard allocation chart counts only **enabled** policies.
 
-Route devices through ISPs that provide better connectivity to specific geographic regions:
+**3. Turn it off** — set `"enabled": false`; agents remove the rule on the next sync or watcher event.
 
-```bash
-# Route VPN server through ISP with better international routing
-curl -X POST http://router1:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "VPN Server",
-    "source_ip": "192.168.1.200",
-    "provider_id": "International-ISP",
-    "description": "VPN server using ISP with better international routing",
-    "enabled": true
-  }'
-```
+## NATS as source of truth
 
-## Troubleshooting
+Three KV buckets:
 
-### Common Issues and Solutions
+- **router-sync** — providers and policies (durable)
+- **router-sync-state** — 60s TTL heartbeats with full interface/route/rule snapshots
+- **router-sync-logging** — desired log level per service id
 
-1. **Permission Denied**: Ensure the service runs with root privileges for netlink operations
-2. **NATS Connection Failed**: Check NATS server configuration and network connectivity
-3. **Interface Not Found**: Verify network interface names exist on the system
-4. **Invalid Gateway**: Ensure gateway IP addresses are valid and reachable
+If R1’s agent restarts, it reconnects, reinstalls the suppress rule, resyncs all policies, and resumes heartbeats. The API never needs direct SSH to the routers for read-only status.
 
-### Debug Mode
+## Deployment with Ansible
 
-Enable debug logging for troubleshooting:
-
-```yaml
-log_level: debug
-```
-
-### Service Management
+From the `home-router` repo:
 
 ```bash
-# Check service status
-sudo systemctl status router-sync
+make env
+cp group_vars/secrets.yml.example group_vars/secrets.yml   # NATS credentials
 
-# View logs
-sudo journalctl -u router-sync -f
-
-# Restart service
-sudo systemctl restart router-sync
+make r2-routing-stack-full
+# NATS + image build + API + agents on r1/r2 + UI
 ```
+
+Individual targets: `make r2-router-sync-api`, `make routers-router-sync-agent`, `make r2-router-sync-ui`.
+
+## Monitoring
+
+- API: `curl http://192.168.2.252:18080/metrics`
+- Agents: `curl http://r1.fcast.ar:18082/metrics`
+- Health: `/health` on both ports
+
+Useful agent metrics: `agent_sync_total`, `agent_rules_total`, `agent_state_publish_total`.
+
+## Lessons learned
+
+1. **Split API and agent** — HTTP and NET_ADMIN should not share a process; central API simplifies the UI and firewall rules.
+2. **Watchers need `>` not `*`** — policy IDs are often IP addresses; `policies.*` silently misses them.
+3. **Collect all routing tables** — `RouteList` only returns main; the UI needs provider tables too.
+4. **Tables vs rules** — netplan for stable uplink defaults; agent for dynamic per-host policy rules.
+5. **suppress_prefixlength** — essential for LAN reachability when mixing policy routing with a shared main table.
 
 ## Conclusion
 
-Router Sync has transformed my multi-ISP home network from a complex, error-prone setup into a reliable, easily manageable system. The ability to instantly route any device or network segment through any ISP with a simple API call has made network management effortless.
-
-Key benefits I've experienced:
-
-- **Reliability**: Zero downtime during router failovers
-- **Flexibility**: Easy switching of devices between ISPs
-- **Simplicity**: Complex routing decisions reduced to simple API calls
-- **Consistency**: Both routers always maintain identical configurations
-- **Monitoring**: Complete visibility into routing policy status
-
-Whether you're running a home network with multiple ISPs or managing a small business network, Router Sync provides the tools you need to implement sophisticated policy-based routing without the complexity.
-
-The project is open-source and actively maintained, with comprehensive documentation and a growing community. If you're struggling with multi-ISP routing management, I highly recommend giving Router Sync a try.
+Router Sync turns multi-ISP routing from a fragile, per-router shell script into a small control plane: configure in the UI or API, store in NATS, apply everywhere agents run, and inspect live state without SSH.
 
 ## Resources
 
-- **GitHub Repository**: [https://github.com/yourusername/router-sync](https://github.com/yourusername/router-sync)
-- **Documentation**: [https://github.com/yourusername/router-sync/blob/main/README.md](https://github.com/yourusername/router-sync/blob/main/README.md)
-- **Architecture Guide**: [https://github.com/yourusername/router-sync/blob/main/ARCHITECTURE.md](https://github.com/yourusername/router-sync/blob/main/ARCHITECTURE.md)
-- **Installation Guide**: [https://github.com/yourusername/router-sync/blob/main/scripts/README.md](https://github.com/yourusername/router-sync/blob/main/scripts/README.md)
+- [README.md](README.md) — install, API, configuration
+- [ARCHITECTURE.md](ARCHITECTURE.md) — components, diagrams, data flows
+- [web/README.md](web/README.md) — UI development and Docker
+- [home-router](https://github.com/yourusername/home-router) — Ansible playbooks and netplan
 
 ---
 
-*Router Sync: Making multi-ISP routing management simple and reliable.*
+*Router Sync: one binary, two modes, three NATS buckets, and a dashboard that shows what your routers are actually doing.*

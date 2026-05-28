@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	mu          sync.RWMutex
+	mu           sync.RWMutex
 	currentLevel = logrus.WarnLevel
+	serviceID    = ""
 )
 
 // SupportedLevels lists valid runtime log levels (lowest to highest verbosity).
@@ -23,9 +24,20 @@ var SupportedLevels = []logrus.Level{
 	logrus.PanicLevel,
 }
 
-// Init sets the global logrus level from startup configuration.
-func Init(level logrus.Level) {
+// Init sets the global logrus level and identifies this process by service ID.
+// service IDs follow the convention "api" or "agent.<hostname>".
+func Init(level logrus.Level, service string) {
+	mu.Lock()
+	serviceID = service
+	mu.Unlock()
 	SetLevel(level)
+}
+
+// ServiceID returns the log service identifier for this process.
+func ServiceID() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return serviceID
 }
 
 // GetLevel returns the current logrus level.

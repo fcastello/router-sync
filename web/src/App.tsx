@@ -4,6 +4,7 @@ import { DashboardPage } from "@/pages/Dashboard";
 import { DevicesPage } from "@/pages/Devices";
 import { PoliciesPage } from "@/pages/Policies";
 import { ProvidersPage } from "@/pages/Providers";
+import { RoutersPage } from "@/pages/Routers";
 import { SettingsPage } from "@/pages/Settings";
 
 export default function App() {
@@ -11,6 +12,7 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<DashboardPage />} />
+        <Route path="routers" element={<RoutersPage />} />
         <Route path="devices" element={<DevicesPage />} />
         <Route path="policies" element={<PoliciesPage />} />
         <Route path="providers" element={<ProvidersPage />} />

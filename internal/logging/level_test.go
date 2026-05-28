@@ -8,8 +8,9 @@ import (
 )
 
 func TestSetAndGetLevel(t *testing.T) {
-	Init(logrus.WarnLevel)
+	Init(logrus.WarnLevel, "test")
 	assert.Equal(t, "warning", GetLevelName())
+	assert.Equal(t, "test", ServiceID())
 
 	SetLevel(logrus.DebugLevel)
 	assert.Equal(t, logrus.DebugLevel, GetLevel())

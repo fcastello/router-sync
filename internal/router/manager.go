@@ -14,23 +14,38 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-// Manager manages routing tables and policies using netlink
+// Manager manages routing tables and policies using netlink.
+// The hostname identifies which interface mapping on a provider applies here.
 type Manager struct {
-	mu sync.RWMutex
+	mu       sync.RWMutex
+	hostname string
 }
 
-// NewManager creates a new router manager
-func NewManager() (*Manager, error) {
-	return &Manager{}, nil
+// NewManager creates a new router manager pinned to the given hostname so it can
+// resolve provider.Interfaces[hostname] consistently.
+func NewManager(hostname string) (*Manager, error) {
+	return &Manager{hostname: hostname}, nil
 }
 
-// SetupProvider sets up routing for an internet provider
+// Hostname returns the hostname this manager is bound to.
+func (m *Manager) Hostname() string {
+	return m.hostname
+}
+
+// SetupProvider sets up routing for an internet provider.
+// Acquires the manager mutex; callers that already hold it (e.g. SyncProviders)
+// must use setupProviderLocked instead.
 func (m *Manager) SetupProvider(provider *models.InternetProvider) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.setupProviderLocked(provider)
+}
 
+// setupProviderLocked performs the provider setup assuming m.mu is already held.
+func (m *Manager) setupProviderLocked(provider *models.InternetProvider) error {
+	iface := provider.InterfaceForHost(m.hostname)
 	logrus.Infof("Setting up provider %s on interface %s with gateway %s",
-		provider.Name, provider.Interface, provider.Gateway)
+		provider.Name, iface, provider.Gateway)
 
 	// Get the network interface
 	// link, err := netlink.LinkByName(provider.Interface)
@@ -248,10 +263,10 @@ func (m *Manager) SyncProviders(providers []*models.InternetProvider) error {
 		}
 	}
 
-	// Set up new routes
+	// Set up new routes. We already hold m.mu, so call the locked variant.
 	for _, provider := range providers {
 		logrus.Debugf("Setting up provider: %s", provider.Name)
-		if err := m.SetupProvider(provider); err != nil {
+		if err := m.setupProviderLocked(provider); err != nil {
 			logrus.Errorf("Failed to set up provider %s: %v", provider.Name, err)
 			continue
 		}
@@ -779,6 +794,105 @@ func (m *Manager) cleanupDuplicateRules() error {
 	}
 
 	return nil
+}
+
+// suppressDefaultRulePriority is the priority of the "fall through to main but
+// ignore its default route" rule. It must sit BEFORE the per-policy rules
+// (which live in 2000-2032) so local traffic to other LAN subnets always
+// resolves via the main table, while default-route traffic falls through to
+// the policy rules and out the chosen provider table.
+const suppressDefaultRulePriority = 10
+
+// suppressDefaultRuleSignature is the substring we look for in `ip rule show`
+// output to detect that the rule is already installed (regardless of who
+// installed it: us on a previous run, an operator, etc.).
+const suppressDefaultRuleSignature = "from all lookup main suppress_prefixlength 0"
+
+// EnsureSuppressDefaultRule installs the global "lookup main with
+// suppress_prefixlength 0" rule at priority 10 if it is not already present.
+// This makes policy-based routing safe for local LAN traffic: anything that
+// matches a more-specific prefix in the main table (LAN, docker, tailscale,
+// etc.) stays in main, and only default-route traffic falls through to the
+// per-source policy rules.
+func (m *Manager) EnsureSuppressDefaultRule() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	present, err := m.hasSuppressDefaultRule()
+	if err != nil {
+		return fmt.Errorf("failed to check suppress-default rule: %w", err)
+	}
+	if present {
+		logrus.Debugf("Suppress-default rule already present at priority %d", suppressDefaultRulePriority)
+		return nil
+	}
+
+	logrus.Infof("Installing suppress-default rule: priority=%d, lookup main, suppress_prefixlength=0",
+		suppressDefaultRulePriority)
+
+	cmd := exec.Command("ip", "rule", "add",
+		"from", "all",
+		"lookup", "main",
+		"suppress_prefixlength", "0",
+		"priority", strconv.Itoa(suppressDefaultRulePriority),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to install suppress-default rule: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// RemoveSuppressDefaultRule deletes the rule installed by
+// EnsureSuppressDefaultRule, matching on the full rule signature so we never
+// remove an unrelated priority-10 rule the operator might have set.
+func (m *Manager) RemoveSuppressDefaultRule() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	present, err := m.hasSuppressDefaultRule()
+	if err != nil {
+		return fmt.Errorf("failed to check suppress-default rule: %w", err)
+	}
+	if !present {
+		logrus.Debug("Suppress-default rule not present; nothing to remove")
+		return nil
+	}
+
+	logrus.Infof("Removing suppress-default rule at priority %d", suppressDefaultRulePriority)
+
+	cmd := exec.Command("ip", "rule", "del",
+		"from", "all",
+		"lookup", "main",
+		"suppress_prefixlength", "0",
+		"priority", strconv.Itoa(suppressDefaultRulePriority),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to remove suppress-default rule: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// hasSuppressDefaultRule returns true if a rule at suppressDefaultRulePriority
+// with the suppress-default signature is currently installed. Caller must hold
+// m.mu.
+func (m *Manager) hasSuppressDefaultRule() (bool, error) {
+	cmd := exec.Command("ip", "rule", "show")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("ip rule show failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	prefix := strconv.Itoa(suppressDefaultRulePriority) + ":"
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		if strings.Contains(line, suppressDefaultRuleSignature) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // CleanupAllRules removes all routing rules managed by this application (priority 2000-2032)

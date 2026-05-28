@@ -27,33 +27,48 @@ type NATSClient interface {
 	ListPolicies() ([]*models.RoutingPolicy, error)
 	DeletePolicy(id string) error
 
+	StoreRouterState(state *models.RouterState) error
+	GetRouterState(hostname string) (*models.RouterState, error)
+	ListRouterStates() ([]*models.RouterState, error)
+	DeleteRouterState(hostname string) error
+
+	SetServiceLogLevel(serviceID, level string) error
+	GetServiceLogLevel(serviceID string) (string, error)
+	ListServiceLogLevels() (map[string]string, error)
+
 	Close()
 }
 
+// Bucket names
+const (
+	bucketCore    = "router-sync"
+	bucketState   = "router-sync-state"
+	bucketLogging = "router-sync-logging"
+
+	stateTTL = 60 * time.Second
+)
+
 // Client represents a NATS client with key-value store capabilities
 type Client struct {
-	conn     *nats.Conn
-	js       nats.JetStreamContext
-	kv       nats.KeyValue
-	writerID string
+	conn       *nats.Conn
+	js         nats.JetStreamContext
+	kv         nats.KeyValue
+	kvState    nats.KeyValue
+	kvLogging  nats.KeyValue
+	writerID   string
 }
 
 // sanitizeKey sanitizes a key to be compatible with NATS key-value store
 func sanitizeKey(key string) string {
-	// NATS keys should only contain alphanumeric characters, dots, and underscores
-	// Replace all invalid characters with underscores
 	var result strings.Builder
 
 	for _, char := range key {
 		switch {
 		case (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9'):
-			// Alphanumeric characters are valid
 			result.WriteRune(char)
-		case char == '.' || char == '_':
-			// Dots and underscores are valid
+		case char == '.' || char == '_' || char == '-':
 			result.WriteRune(char)
 		default:
-			// Replace all other characters with underscore
 			result.WriteRune('_')
 		}
 	}
@@ -69,7 +84,7 @@ func NewClient(cfg config.NATSConfig) (*Client, error) {
 		nats.Name(cfg.ClientID),
 		nats.Timeout(10 * time.Second),
 		nats.ReconnectWait(1 * time.Second),
-		nats.MaxReconnects(5),
+		nats.MaxReconnects(-1),
 	}
 
 	if cfg.Username != "" && cfg.Password != "" {
@@ -91,18 +106,22 @@ func NewClient(cfg config.NATSConfig) (*Client, error) {
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
-	// Create or get the key-value store
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket: "router-sync",
-		TTL:    0, // No TTL for persistence
-	})
+	kv, err := ensureBucket(js, bucketCore, 0)
 	if err != nil {
-		// Try to get existing bucket
-		kv, err = js.KeyValue("router-sync")
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("failed to create/get key-value store: %w", err)
-		}
+		conn.Close()
+		return nil, err
+	}
+
+	kvState, err := ensureBucket(js, bucketState, stateTTL)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	kvLogging, err := ensureBucket(js, bucketLogging, 0)
+	if err != nil {
+		conn.Close()
+		return nil, err
 	}
 
 	writerID := cfg.WriterID
@@ -111,13 +130,14 @@ func NewClient(cfg config.NATSConfig) (*Client, error) {
 	}
 
 	client := &Client{
-		conn:     conn,
-		js:       js,
-		kv:       kv,
-		writerID: writerID,
+		conn:      conn,
+		js:        js,
+		kv:        kv,
+		kvState:   kvState,
+		kvLogging: kvLogging,
+		writerID:  writerID,
 	}
 
-	// Test the key-value store
 	if err := client.testKeyValueStore(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("key-value store test failed: %w", err)
@@ -127,6 +147,20 @@ func NewClient(cfg config.NATSConfig) (*Client, error) {
 	return client, nil
 }
 
+// ensureBucket creates a bucket if missing or returns the existing one.
+func ensureBucket(js nats.JetStreamContext, name string, ttl time.Duration) (nats.KeyValue, error) {
+	cfg := &nats.KeyValueConfig{Bucket: name, TTL: ttl}
+	kv, err := js.CreateKeyValue(cfg)
+	if err == nil {
+		return kv, nil
+	}
+	kv, err = js.KeyValue(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create/get %s bucket: %w", name, err)
+	}
+	return kv, nil
+}
+
 // Close closes the NATS connection
 func (c *Client) Close() {
 	if c.conn != nil {
@@ -134,12 +168,17 @@ func (c *Client) Close() {
 	}
 }
 
+// WriterID returns the writer identity used for active/active conflict resolution.
+func (c *Client) WriterID() string {
+	return c.writerID
+}
+
 // StoreProvider stores an internet provider in the key-value store using revision CAS.
 func (c *Client) StoreProvider(provider *models.InternetProvider) error {
 	key := fmt.Sprintf("providers.%s", sanitizeKey(provider.ID))
 	logrus.Debugf("Storing provider with key: %s (original ID: %s)", key, provider.ID)
 
-	return c.storeWithCAS(key, func(existing []byte) ([]byte, error) {
+	return c.storeWithCAS(c.kv, key, func(existing []byte) ([]byte, error) {
 		var prev *models.InternetProvider
 		if len(existing) > 0 {
 			var parsed models.InternetProvider
@@ -155,11 +194,9 @@ func (c *Client) StoreProvider(provider *models.InternetProvider) error {
 
 // GetProvider retrieves an internet provider from the key-value store
 func (c *Client) GetProvider(id string) (*models.InternetProvider, error) {
-	// Try with sanitized key first
 	key := fmt.Sprintf("providers.%s", sanitizeKey(id))
 	entry, err := c.kv.Get(key)
 	if err != nil {
-		// If that fails, try with the original ID (in case it was stored before sanitization)
 		key = fmt.Sprintf("providers.%s", id)
 		entry, err = c.kv.Get(key)
 		if err != nil {
@@ -179,7 +216,6 @@ func (c *Client) GetProvider(id string) (*models.InternetProvider, error) {
 func (c *Client) ListProviders() ([]*models.InternetProvider, error) {
 	keys, err := c.kv.Keys()
 	if err != nil {
-		// Check if the error is due to no keys found (empty bucket)
 		if strings.Contains(err.Error(), "no keys found") {
 			logrus.Debug("No providers found in key-value store")
 			return []*models.InternetProvider{}, nil
@@ -190,11 +226,7 @@ func (c *Client) ListProviders() ([]*models.InternetProvider, error) {
 	var providers []*models.InternetProvider
 	for _, key := range keys {
 		if len(key) > 10 && key[:10] == "providers." {
-			// Extract the ID from the key (remove "providers." prefix)
 			providerID := key[10:]
-
-			// Since we can't reliably reverse the sanitization (multiple chars could map to '_'),
-			// we'll try to get the provider using the sanitized ID first
 			provider, err := c.GetProvider(providerID)
 			if err != nil {
 				logrus.Warnf("Failed to get provider with sanitized ID %s: %v", providerID, err)
@@ -209,11 +241,9 @@ func (c *Client) ListProviders() ([]*models.InternetProvider, error) {
 
 // DeleteProvider deletes an internet provider from the key-value store
 func (c *Client) DeleteProvider(id string) error {
-	// Try with sanitized key first
 	key := fmt.Sprintf("providers.%s", sanitizeKey(id))
 	err := c.kv.Delete(key)
 	if err != nil {
-		// If that fails, try with the original ID (in case it was stored before sanitization)
 		key = fmt.Sprintf("providers.%s", id)
 		err = c.kv.Delete(key)
 		if err != nil {
@@ -229,7 +259,7 @@ func (c *Client) DeleteProvider(id string) error {
 func (c *Client) StorePolicy(policy *models.RoutingPolicy) error {
 	key := fmt.Sprintf("policies.%s", sanitizeKey(policy.ID))
 
-	return c.storeWithCAS(key, func(existing []byte) ([]byte, error) {
+	return c.storeWithCAS(c.kv, key, func(existing []byte) ([]byte, error) {
 		var prev *models.RoutingPolicy
 		if len(existing) > 0 {
 			var parsed models.RoutingPolicy
@@ -246,10 +276,10 @@ func (c *Client) StorePolicy(policy *models.RoutingPolicy) error {
 const maxCASRetries = 5
 
 // storeWithCAS writes a KV entry using JetStream revision compare-and-swap.
-func (c *Client) storeWithCAS(key string, build func(existing []byte) ([]byte, error)) error {
+func (c *Client) storeWithCAS(kv nats.KeyValue, key string, build func(existing []byte) ([]byte, error)) error {
 	var lastErr error
 	for attempt := 0; attempt < maxCASRetries; attempt++ {
-		entry, err := c.kv.Get(key)
+		entry, err := kv.Get(key)
 		if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
 			return fmt.Errorf("failed to read key %s: %w", key, err)
 		}
@@ -267,9 +297,9 @@ func (c *Client) storeWithCAS(key string, build func(existing []byte) ([]byte, e
 		}
 
 		if revision == 0 {
-			_, err = c.kv.Create(key, data)
+			_, err = kv.Create(key, data)
 		} else {
-			_, err = c.kv.Update(key, data, revision)
+			_, err = kv.Update(key, data, revision)
 		}
 		if err == nil {
 			logrus.Debugf("Stored key %s (attempt %d)", key, attempt+1)
@@ -289,11 +319,9 @@ func (c *Client) storeWithCAS(key string, build func(existing []byte) ([]byte, e
 
 // GetPolicy retrieves a routing policy from the key-value store
 func (c *Client) GetPolicy(id string) (*models.RoutingPolicy, error) {
-	// Try with sanitized key first
 	key := fmt.Sprintf("policies.%s", sanitizeKey(id))
 	entry, err := c.kv.Get(key)
 	if err != nil {
-		// If that fails, try with the original ID (in case it was stored before sanitization)
 		key = fmt.Sprintf("policies.%s", id)
 		entry, err = c.kv.Get(key)
 		if err != nil {
@@ -313,7 +341,6 @@ func (c *Client) GetPolicy(id string) (*models.RoutingPolicy, error) {
 func (c *Client) ListPolicies() ([]*models.RoutingPolicy, error) {
 	keys, err := c.kv.Keys()
 	if err != nil {
-		// Check if the error is due to no keys found (empty bucket)
 		if strings.Contains(err.Error(), "no keys found") {
 			logrus.Debug("No policies found in key-value store")
 			return []*models.RoutingPolicy{}, nil
@@ -324,11 +351,7 @@ func (c *Client) ListPolicies() ([]*models.RoutingPolicy, error) {
 	var policies []*models.RoutingPolicy
 	for _, key := range keys {
 		if len(key) > 9 && key[:9] == "policies." {
-			// Extract the ID from the key (remove "policies." prefix)
 			policyID := key[9:]
-
-			// Since we can't reliably reverse the sanitization (multiple chars could map to '_'),
-			// we'll try to get the policy using the sanitized ID first
 			policy, err := c.GetPolicy(policyID)
 			if err != nil {
 				logrus.Warnf("Failed to get policy with sanitized ID %s: %v", policyID, err)
@@ -343,11 +366,9 @@ func (c *Client) ListPolicies() ([]*models.RoutingPolicy, error) {
 
 // DeletePolicy deletes a routing policy from the key-value store
 func (c *Client) DeletePolicy(id string) error {
-	// Try with sanitized key first
 	key := fmt.Sprintf("policies.%s", sanitizeKey(id))
 	err := c.kv.Delete(key)
 	if err != nil {
-		// If that fails, try with the original ID (in case it was stored before sanitization)
 		key = fmt.Sprintf("policies.%s", id)
 		err = c.kv.Delete(key)
 		if err != nil {
@@ -361,7 +382,10 @@ func (c *Client) DeletePolicy(id string) error {
 
 // WatchProviders watches for changes to providers
 func (c *Client) WatchProviders(ctx context.Context, callback func(*models.InternetProvider, nats.KeyValueOp)) error {
-	watcher, err := c.kv.Watch("providers.*")
+	// "providers.>" matches every key under the "providers." prefix, including
+	// multi-token IDs. Plain "providers.*" only matches single-token IDs, which
+	// would silently drop providers whose name contains a dot.
+	watcher, err := c.kv.Watch("providers.>")
 	if err != nil {
 		return fmt.Errorf("failed to create provider watcher: %w", err)
 	}
@@ -378,7 +402,6 @@ func (c *Client) WatchProviders(ctx context.Context, callback func(*models.Inter
 
 			if len(update.Key()) > 10 && update.Key()[:10] == "providers." {
 				if update.Operation() == nats.KeyValueDelete {
-					// Handle deletion
 					callback(nil, update.Operation())
 					continue
 				}
@@ -396,7 +419,10 @@ func (c *Client) WatchProviders(ctx context.Context, callback func(*models.Inter
 
 // WatchPolicies watches for changes to policies
 func (c *Client) WatchPolicies(ctx context.Context, callback func(*models.RoutingPolicy, nats.KeyValueOp)) error {
-	watcher, err := c.kv.Watch("policies.*")
+	// "policies.>" matches every key under the "policies." prefix, including
+	// IPv4 IDs like 192.168.2.25 that contain dots. Plain "policies.*" matches
+	// only single-token IDs, silently dropping every IP-keyed policy.
+	watcher, err := c.kv.Watch("policies.>")
 	if err != nil {
 		return fmt.Errorf("failed to create policy watcher: %w", err)
 	}
@@ -413,7 +439,6 @@ func (c *Client) WatchPolicies(ctx context.Context, callback func(*models.Routin
 
 			if len(update.Key()) > 9 && update.Key()[:9] == "policies." {
 				if update.Operation() == nats.KeyValueDelete {
-					// Handle deletion
 					callback(nil, update.Operation())
 					continue
 				}
@@ -425,6 +450,178 @@ func (c *Client) WatchPolicies(ctx context.Context, callback func(*models.Routin
 				}
 				callback(&policy, update.Operation())
 			}
+		}
+	}
+}
+
+// StoreRouterState stores a router state heartbeat. Uses simple Put because state
+// is TTL'd and overwritten by the same writer every interval.
+func (c *Client) StoreRouterState(state *models.RouterState) error {
+	if state.Hostname == "" {
+		return fmt.Errorf("router state hostname is required")
+	}
+	state.LastSeen = time.Now().UTC()
+	data, err := state.ToJSON()
+	if err != nil {
+		return fmt.Errorf("failed to marshal router state: %w", err)
+	}
+	key := fmt.Sprintf("router.%s", sanitizeKey(state.Hostname))
+	if _, err := c.kvState.Put(key, data); err != nil {
+		return fmt.Errorf("failed to store router state for %s: %w", state.Hostname, err)
+	}
+	return nil
+}
+
+// GetRouterState fetches a single router state.
+func (c *Client) GetRouterState(hostname string) (*models.RouterState, error) {
+	key := fmt.Sprintf("router.%s", sanitizeKey(hostname))
+	entry, err := c.kvState.Get(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get router state %s: %w", hostname, err)
+	}
+	var state models.RouterState
+	if err := state.FromJSON(entry.Value()); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal router state: %w", err)
+	}
+	return &state, nil
+}
+
+// ListRouterStates returns all known router states (alive within the TTL window).
+func (c *Client) ListRouterStates() ([]*models.RouterState, error) {
+	keys, err := c.kvState.Keys()
+	if err != nil {
+		if strings.Contains(err.Error(), "no keys found") {
+			return []*models.RouterState{}, nil
+		}
+		return nil, fmt.Errorf("failed to list router state keys: %w", err)
+	}
+
+	var states []*models.RouterState
+	for _, key := range keys {
+		if !strings.HasPrefix(key, "router.") {
+			continue
+		}
+		entry, err := c.kvState.Get(key)
+		if err != nil {
+			logrus.Warnf("Failed to get router state %s: %v", key, err)
+			continue
+		}
+		var state models.RouterState
+		if err := state.FromJSON(entry.Value()); err != nil {
+			logrus.Warnf("Failed to unmarshal router state %s: %v", key, err)
+			continue
+		}
+		states = append(states, &state)
+	}
+	return states, nil
+}
+
+// DeleteRouterState removes a router state entry.
+func (c *Client) DeleteRouterState(hostname string) error {
+	key := fmt.Sprintf("router.%s", sanitizeKey(hostname))
+	if err := c.kvState.Delete(key); err != nil {
+		return fmt.Errorf("failed to delete router state %s: %w", hostname, err)
+	}
+	return nil
+}
+
+// SetServiceLogLevel persists a runtime log level for a service ID
+// (e.g. "api", "agent.r1"). Consumers watch level.<service_id> to apply changes.
+func (c *Client) SetServiceLogLevel(serviceID, level string) error {
+	key := fmt.Sprintf("level.%s", sanitizeKey(serviceID))
+	if _, err := c.kvLogging.Put(key, []byte(level)); err != nil {
+		return fmt.Errorf("failed to set log level for %s: %w", serviceID, err)
+	}
+	return nil
+}
+
+// GetServiceLogLevel returns the persisted log level for a service ID.
+func (c *Client) GetServiceLogLevel(serviceID string) (string, error) {
+	key := fmt.Sprintf("level.%s", sanitizeKey(serviceID))
+	entry, err := c.kvLogging.Get(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to get log level for %s: %w", serviceID, err)
+	}
+	return string(entry.Value()), nil
+}
+
+// ListServiceLogLevels returns the persisted log levels for every known service.
+func (c *Client) ListServiceLogLevels() (map[string]string, error) {
+	keys, err := c.kvLogging.Keys()
+	if err != nil {
+		if strings.Contains(err.Error(), "no keys found") {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("failed to list log level keys: %w", err)
+	}
+	out := make(map[string]string)
+	for _, key := range keys {
+		if !strings.HasPrefix(key, "level.") {
+			continue
+		}
+		serviceID := key[len("level."):]
+		entry, err := c.kvLogging.Get(key)
+		if err != nil {
+			continue
+		}
+		out[serviceID] = string(entry.Value())
+	}
+	return out, nil
+}
+
+// WatchServiceLogLevel watches a single service's log level for runtime changes.
+// callback receives the level string on every update.
+func (c *Client) WatchServiceLogLevel(ctx context.Context, serviceID string, callback func(level string)) error {
+	key := fmt.Sprintf("level.%s", sanitizeKey(serviceID))
+	watcher, err := c.kvLogging.Watch(key)
+	if err != nil {
+		return fmt.Errorf("failed to watch log level for %s: %w", serviceID, err)
+	}
+	defer func() { _ = watcher.Stop() }()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case update := <-watcher.Updates():
+			if update == nil {
+				continue
+			}
+			if update.Operation() == nats.KeyValueDelete {
+				continue
+			}
+			callback(string(update.Value()))
+		}
+	}
+}
+
+// WatchRouterStates watches for router state changes. Useful for API gauges and UI live updates.
+func (c *Client) WatchRouterStates(ctx context.Context, callback func(*models.RouterState, nats.KeyValueOp)) error {
+	// Match every "router.<hostname>" key, including hostnames with dots.
+	watcher, err := c.kvState.Watch("router.>")
+	if err != nil {
+		return fmt.Errorf("failed to create router state watcher: %w", err)
+	}
+	defer func() { _ = watcher.Stop() }()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case update := <-watcher.Updates():
+			if update == nil {
+				continue
+			}
+			if update.Operation() == nats.KeyValueDelete || update.Operation() == nats.KeyValuePurge {
+				callback(nil, update.Operation())
+				continue
+			}
+			var state models.RouterState
+			if err := state.FromJSON(update.Value()); err != nil {
+				logrus.Warnf("Failed to unmarshal router state update: %v", err)
+				continue
+			}
+			callback(&state, update.Operation())
 		}
 	}
 }

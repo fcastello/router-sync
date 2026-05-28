@@ -1,7 +1,10 @@
 export interface InternetProvider {
   id: string;
   name: string;
-  interface: string;
+  /** Map of router hostname -> interface name. Preferred over `interface`. */
+  interfaces?: Record<string, string>;
+  /** Deprecated legacy single-interface field, still accepted for backward compatibility. */
+  interface?: string;
   table_id: number;
   gateway: string;
   description?: string;
@@ -29,14 +32,22 @@ export interface HealthResponse {
   service: string;
 }
 
+export interface RouterInfo {
+  hostname: string;
+  agent_version: string;
+  log_level: string;
+  last_seen: string;
+  age_seconds: number;
+}
+
 export interface StatsResponse {
   sync: {
     providers_count: number;
     policies_count: number;
-    sync_interval: string;
+    sync_interval?: string;
     policies_per_provider?: Record<string, number>;
   };
-  router: Record<string, unknown>;
+  routers?: RouterInfo[];
   log_level?: string;
   timestamp: string;
   version?: string;
@@ -45,7 +56,19 @@ export interface StatsResponse {
 }
 
 export interface LogLevelResponse {
+  service_id?: string;
   level: string;
+  levels: string[];
+}
+
+export interface ServiceLevel {
+  level: string;
+  source?: string;
+  online?: boolean;
+}
+
+export interface LogLevelsResponse {
+  services: Record<string, ServiceLevel>;
   levels: string[];
 }
 
@@ -55,7 +78,10 @@ export interface SetLogLevelRequest {
 
 export interface CreateProviderRequest {
   name: string;
-  interface: string;
+  /** Preferred: map of hostname -> interface. */
+  interfaces?: Record<string, string>;
+  /** Legacy: shared interface name; only used when `interfaces` is empty. */
+  interface?: string;
   table_id: number;
   gateway: string;
   description?: string;
@@ -76,3 +102,45 @@ export interface DeviceMeta {
 }
 
 export type DeviceMetaMap = Record<string, DeviceMeta>;
+
+export interface NetworkInterface {
+  name: string;
+  mac?: string;
+  mtu: number;
+  up: boolean;
+  addresses: string[];
+}
+
+export interface RouteEntry {
+  dst: string;
+  gateway?: string;
+  interface?: string;
+  protocol?: string;
+  scope?: string;
+  metric?: number;
+}
+
+export interface RoutingTable {
+  id: number;
+  name?: string;
+  routes: RouteEntry[];
+}
+
+export interface IPRule {
+  priority: number;
+  from: string;
+  table: number;
+  table_name?: string;
+}
+
+export interface RouterState {
+  hostname: string;
+  agent_version: string;
+  log_level: string;
+  last_seen: string;
+  age_seconds: number;
+  online: boolean;
+  interfaces: NetworkInterface[];
+  tables: RoutingTable[];
+  rules: IPRule[];
+}

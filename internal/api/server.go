@@ -10,41 +10,41 @@ import (
 	"router-sync/docs"
 	"router-sync/internal/config"
 	"router-sync/internal/logging"
+	"router-sync/internal/metrics"
 	"router-sync/internal/nats"
-	"router-sync/internal/router"
-	"router-sync/internal/sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
-// Server represents the API server
+// Server represents the API server. It owns no kernel state; it only mediates
+// between the UI and NATS (providers, policies, router state, log levels).
 type Server struct {
-	config        config.APIConfig
-	natsClient    nats.NATSClient
-	routerManager *router.Manager
-	syncService   *sync.Service
-	server        *http.Server
+	config     config.APIConfig
+	natsClient nats.NATSClient
+	server     *http.Server
 
-	// Prometheus metrics
+	reg                 *prometheus.Registry
 	httpRequestsTotal   *prometheus.CounterVec
 	httpRequestDuration *prometheus.HistogramVec
 	providersTotal      prometheus.Gauge
 	policiesTotal       prometheus.Gauge
+	routersKnown        prometheus.Gauge
+	stateAgeSeconds     *prometheus.GaugeVec
+	logLevelSetTotal    prometheus.Counter
 
-	// Version info
 	version   string
 	buildTime string
 	gitCommit string
 }
 
-// NewServer creates a new API server
-func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, routerManager *router.Manager, syncService *sync.Service, version, buildTime, gitCommit string) *Server {
-	// Initialize Prometheus metrics
+// NewServer creates a new API server.
+func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, version, buildTime, gitCommit string) *Server {
+	reg := metrics.NewRegistry()
+
 	httpRequestsTotal := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "http_requests_total",
@@ -62,51 +62,59 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, routerManager *
 		[]string{"method", "endpoint"},
 	)
 
-	providersTotal := prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "providers_total",
-			Help: "Total number of internet providers",
-		},
-	)
+	providersTotal := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "providers_total",
+		Help: "Total number of internet providers",
+	})
 
-	policiesTotal := prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "policies_total",
-			Help: "Total number of routing policies",
-		},
-	)
+	policiesTotal := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "policies_total",
+		Help: "Total number of routing policies",
+	})
 
-	// Register metrics
-	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration, providersTotal, policiesTotal)
+	routersKnown := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "routers_known",
+		Help: "Number of routers reporting state to the API.",
+	})
+
+	stateAgeSeconds := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "router_state_age_seconds",
+		Help: "Age of the latest router state heartbeat in seconds.",
+	}, []string{"hostname"})
+
+	logLevelSetTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "log_level_set_total",
+		Help: "Number of log level changes applied via the API.",
+	})
+
+	reg.MustRegister(httpRequestsTotal, httpRequestDuration, providersTotal, policiesTotal, routersKnown, stateAgeSeconds, logLevelSetTotal)
 
 	server := &Server{
 		config:              cfg,
 		natsClient:          natsClient,
-		routerManager:       routerManager,
-		syncService:         syncService,
+		reg:                 reg,
 		httpRequestsTotal:   httpRequestsTotal,
 		httpRequestDuration: httpRequestDuration,
 		providersTotal:      providersTotal,
 		policiesTotal:       policiesTotal,
+		routersKnown:        routersKnown,
+		stateAgeSeconds:     stateAgeSeconds,
+		logLevelSetTotal:    logLevelSetTotal,
 		version:             version,
 		buildTime:           buildTime,
 		gitCommit:           gitCommit,
 	}
 
-	// Set up Gin router
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(corsMiddleware())
 	router.Use(server.metricsMiddleware())
 	router.Use(server.urlDecodeMiddleware())
 
-	// Configure router to handle special characters in parameters
 	router.RedirectFixedPath = false
 
-	// API routes
 	v1 := router.Group("/api/v1")
 	{
-		// Provider endpoints
 		providers := v1.Group("/providers")
 		{
 			providers.GET("", server.listProviders)
@@ -116,7 +124,6 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, routerManager *
 			providers.DELETE("/:id", server.deleteProvider)
 		}
 
-		// Policy endpoints
 		policies := v1.Group("/policies")
 		{
 			policies.GET("", server.listPolicies)
@@ -126,25 +133,34 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, routerManager *
 			policies.DELETE("/:id", server.deletePolicy)
 		}
 
-		// Sync endpoints
+		routers := v1.Group("/routers")
+		{
+			routers.GET("", server.listRouters)
+			routers.GET("/:hostname", server.getRouter)
+			routers.GET("/:hostname/interfaces", server.getRouterInterfaces)
+			routers.GET("/:hostname/routes", server.getRouterRoutes)
+			routers.GET("/:hostname/rules", server.getRouterRules)
+		}
+
+		logs := v1.Group("/logging")
+		{
+			logs.GET("/levels", server.listLogLevels)
+			logs.GET("/level", server.getOwnLogLevel)
+			logs.PUT("/level", server.setOwnLogLevel)
+			logs.GET("/level/:service_id", server.getLogLevelByService)
+			logs.PUT("/level/:service_id", server.setLogLevelByService)
+		}
+
 		v1.POST("/sync", server.triggerSync)
 		v1.GET("/stats", server.getStats)
-
-		// Runtime logging
-		v1.GET("/logging/level", server.getLogLevel)
-		v1.PUT("/logging/level", server.setLogLevel)
 	}
 
-	// Swagger: empty Host so the UI uses the browser's host:port (e.g. 192.168.2.252:18080)
 	docs.SwaggerInfo.Host = ""
 	docs.SwaggerInfo.BasePath = "/"
 	docs.SwaggerInfo.Schemes = []string{"http"}
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// Prometheus metrics
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
-
-	// Health check
+	router.GET("/metrics", gin.WrapH(metrics.HandlerFor(reg)))
 	router.GET("/health", server.healthCheck)
 
 	server.server = &http.Server{
@@ -180,7 +196,6 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-// metricsMiddleware adds Prometheus metrics middleware
 func (s *Server) metricsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -202,10 +217,8 @@ func (s *Server) metricsMiddleware() gin.HandlerFunc {
 	}
 }
 
-// urlDecodeMiddleware decodes URL-encoded parameters
 func (s *Server) urlDecodeMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Decode URL-encoded parameters
 		for i, param := range c.Params {
 			decoded, err := url.QueryUnescape(param.Value)
 			if err == nil {
@@ -228,53 +241,71 @@ func (s *Server) healthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "healthy",
 		"timestamp": time.Now().UTC(),
-		"service":   "router-sync",
+		"service":   "router-sync-api",
 	})
 }
 
-// triggerSync triggers a manual synchronization
+// triggerSync is kept as a no-op for compatibility; agents perform sync.
 // @Summary Trigger synchronization
-// @Description Manually trigger synchronization with NATS KV store
+// @Description Manually trigger synchronization. Agents perform the actual sync; this endpoint is a no-op in the split architecture.
 // @Tags sync
 // @Accept json
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/v1/sync [post]
 func (s *Server) triggerSync(c *gin.Context) {
-	// This would trigger a manual sync
-	// For now, we'll just return success
 	c.JSON(http.StatusOK, gin.H{
-		"message":   "Sync triggered successfully",
+		"message":   "Agents continuously sync from NATS; this endpoint is a no-op.",
 		"timestamp": time.Now().UTC(),
 	})
 }
 
-// getStats returns service statistics
+// getStats returns aggregated service statistics
 // @Summary Get service statistics
-// @Description Get statistics about providers, policies, and routing
+// @Description Get statistics about providers, policies, routers, and the API itself.
 // @Tags stats
 // @Accept json
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Router /api/v1/stats [get]
 func (s *Server) getStats(c *gin.Context) {
-	// Get sync service stats
-	syncStats := s.syncService.GetStats()
+	providers, _ := s.natsClient.ListProviders()
+	policies, _ := s.natsClient.ListPolicies()
+	states, _ := s.natsClient.ListRouterStates()
 
-	// Get router stats
-	routerStats, err := s.routerManager.GetRoutingStats()
-	if err != nil {
-		logrus.Errorf("Failed to get router stats: %v", err)
-		routerStats = make(map[string]interface{})
+	providersCount := len(providers)
+	policiesCount := len(policies)
+
+	policiesPerProvider := make(map[string]int)
+	for _, p := range policies {
+		policiesPerProvider[p.ProviderID]++
 	}
 
-	// Update Prometheus metrics
-	s.providersTotal.Set(float64(syncStats["providers_count"].(int)))
-	s.policiesTotal.Set(float64(syncStats["policies_count"].(int)))
+	routerInfos := make([]gin.H, 0, len(states))
+	now := time.Now().UTC()
+	for _, st := range states {
+		age := now.Sub(st.LastSeen).Seconds()
+		s.stateAgeSeconds.WithLabelValues(st.Hostname).Set(age)
+		routerInfos = append(routerInfos, gin.H{
+			"hostname":      st.Hostname,
+			"agent_version": st.AgentVersion,
+			"log_level":     st.LogLevel,
+			"last_seen":     st.LastSeen,
+			"age_seconds":   age,
+		})
+	}
+
+	s.providersTotal.Set(float64(providersCount))
+	s.policiesTotal.Set(float64(policiesCount))
+	s.routersKnown.Set(float64(len(states)))
 
 	stats := gin.H{
-		"sync":       syncStats,
-		"router":     routerStats,
+		"sync": gin.H{
+			"providers_count":       providersCount,
+			"policies_count":        policiesCount,
+			"policies_per_provider": policiesPerProvider,
+		},
+		"routers":    routerInfos,
 		"log_level":  logging.GetLevelName(),
 		"timestamp":  time.Now().UTC(),
 		"version":    s.version,

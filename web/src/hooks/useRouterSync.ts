@@ -8,8 +8,11 @@ export const queryKeys = {
   stats: ["stats"] as const,
   providers: ["providers"] as const,
   policies: ["policies"] as const,
+  routers: ["routers"] as const,
+  router: (hostname: string) => ["router", hostname] as const,
   deviceMeta: ["deviceMeta"] as const,
   logLevel: ["logLevel"] as const,
+  logLevels: ["logLevels"] as const,
 };
 
 export function useHealth(pollMs = 5000) {
@@ -40,6 +43,23 @@ export function usePolicies() {
   return useQuery({
     queryKey: queryKeys.policies,
     queryFn: () => api.listPolicies(),
+  });
+}
+
+export function useRouters(pollMs = 10000) {
+  return useQuery({
+    queryKey: queryKeys.routers,
+    queryFn: () => api.listRouters(),
+    refetchInterval: pollMs,
+  });
+}
+
+export function useRouter(hostname: string, pollMs = 10000) {
+  return useQuery({
+    queryKey: queryKeys.router(hostname),
+    queryFn: () => api.getRouter(hostname),
+    enabled: Boolean(hostname),
+    refetchInterval: pollMs,
   });
 }
 
@@ -126,17 +146,39 @@ export function usePolicyMutations() {
 export function useLogLevel() {
   return useQuery({
     queryKey: queryKeys.logLevel,
-    queryFn: () => api.getLogLevel(),
+    queryFn: () => api.getOwnLogLevel(),
+  });
+}
+
+export function useLogLevels(pollMs = 10000) {
+  return useQuery({
+    queryKey: queryKeys.logLevels,
+    queryFn: () => api.listLogLevels(),
+    refetchInterval: pollMs,
   });
 }
 
 export function useLogLevelMutation() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (level: string) => api.setLogLevel({ level }),
+    mutationFn: (level: string) => api.setOwnLogLevel({ level }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.logLevel });
+      qc.invalidateQueries({ queryKey: queryKeys.logLevels });
       qc.invalidateQueries({ queryKey: queryKeys.stats });
+    },
+  });
+}
+
+export function useServiceLogLevelMutation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ serviceId, level }: { serviceId: string; level: string }) =>
+      api.setServiceLogLevel(serviceId, { level }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.logLevels });
+      qc.invalidateQueries({ queryKey: queryKeys.logLevel });
+      qc.invalidateQueries({ queryKey: queryKeys.routers });
     },
   });
 }

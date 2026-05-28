@@ -71,6 +71,50 @@ func (m *MockNATSClient) DeletePolicy(id string) error {
 	return args.Error(0)
 }
 
+func (m *MockNATSClient) StoreRouterState(state *models.RouterState) error {
+	args := m.Called(state)
+	return args.Error(0)
+}
+
+func (m *MockNATSClient) GetRouterState(hostname string) (*models.RouterState, error) {
+	args := m.Called(hostname)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.RouterState), args.Error(1)
+}
+
+func (m *MockNATSClient) ListRouterStates() ([]*models.RouterState, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*models.RouterState), args.Error(1)
+}
+
+func (m *MockNATSClient) DeleteRouterState(hostname string) error {
+	args := m.Called(hostname)
+	return args.Error(0)
+}
+
+func (m *MockNATSClient) SetServiceLogLevel(serviceID, level string) error {
+	args := m.Called(serviceID, level)
+	return args.Error(0)
+}
+
+func (m *MockNATSClient) GetServiceLogLevel(serviceID string) (string, error) {
+	args := m.Called(serviceID)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockNATSClient) ListServiceLogLevels() (map[string]string, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
 func (m *MockNATSClient) Close() {
 	m.Called()
 }

@@ -22,17 +22,17 @@ CHANGELOG_FILE=CHANGELOG.md
 # Default target
 all: clean build
 
-# Build the application
+# Build the application (single binary with --mode={api|agent} dispatch)
 build:
-	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) main.go
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/router-sync
 
 # Build for multiple platforms
 build-all: clean
 	mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 main.go
-	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 main.go
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 main.go
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 main.go
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/router-sync
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/router-sync
+	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./cmd/router-sync
+	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./cmd/router-sync
 
 # Clean build artifacts
 clean:
@@ -197,13 +197,21 @@ install: build
 uninstall:
 	sudo rm -f /usr/local/bin/$(BINARY_NAME)
 
-# Run the application locally
+# Run the application locally (default API mode)
 run: build
-	./$(BUILD_DIR)/$(BINARY_NAME) -config config.yaml
+	./$(BUILD_DIR)/$(BINARY_NAME) --mode=api -config config.yaml
+
+# Run in API mode
+run-api: build
+	./$(BUILD_DIR)/$(BINARY_NAME) --mode=api -config config.yaml
+
+# Run in agent mode (requires NET_ADMIN — usually only on the router itself)
+run-agent: build
+	./$(BUILD_DIR)/$(BINARY_NAME) --mode=agent -config config.yaml
 
 # Run with debug logging
 run-debug: build
-	./$(BUILD_DIR)/$(BINARY_NAME) -config config.yaml -log-level debug
+	ROUTER_SYNC_LOG_LEVEL=debug ./$(BUILD_DIR)/$(BINARY_NAME) --mode=api -config config.yaml
 
 # Docker build
 docker-build:

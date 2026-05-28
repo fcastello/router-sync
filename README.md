@@ -1,767 +1,306 @@
 # Router Sync
 
-A Go-based router synchronization service that manages internet providers and routing policies using NATS.io as the source of truth. This service enables policy-based routing across multiple routers in a LAN environment.
+A Go-based router synchronization stack that manages internet providers and routing policies using NATS JetStream as the source of truth. It enables policy-based routing across multiple routers in a LAN environment.
+
+## Architecture (split-binary)
+
+The same binary runs in one of two modes selected at runtime by `--mode`:
+
+| Mode | Where | Network | Responsibilities |
+|------|-------|---------|------------------|
+| **`--mode=api`** | R2 (or any host) | Published port `:18080`, no NET_ADMIN | REST API, Swagger, metrics; reads/writes NATS only |
+| **`--mode=agent`** | Every router (R1 + R2) | `network_mode: host`, NET_ADMIN | Watches NATS, applies `ip rule`, heartbeats `RouterState` every 5s |
+
+A separate **web UI** container on R2 (`:18081`) talks only to the API.
+
+```
+                          ┌──────────────────────┐
+       browser  ────►     │  router-sync UI      │
+                          │  (R2, port 18081)    │
+                          └──────────┬───────────┘
+                                     │ HTTP
+                          ┌──────────▼───────────┐
+                          │  router-sync API     │
+                          │  --mode=api          │
+                          │  (R2, port 18080)    │
+                          └──────────┬───────────┘
+                                     │ NATS (auth)
+                          ┌──────────▼───────────┐
+                          │  NATS JetStream      │
+                          │  (R2, port 4222)     │
+                          │  buckets:            │
+                          │    router-sync       │
+                          │    router-sync-state │
+                          │    router-sync-logging
+                          └──┬───────────────┬───┘
+                             │               │
+              ┌──────────────▼───┐  ┌────────▼─────────┐
+              │ Agent on R1      │  │ Agent on R2      │
+              │ --mode=agent     │  │ --mode=agent     │
+              │ NET_ADMIN, host  │  │ NET_ADMIN, host  │
+              │ :18082/metrics   │  │ :18082/metrics   │
+              └──────────────────┘  └──────────────────┘
+```
+
+### NATS KV buckets
+
+| Bucket | TTL | Keys | Purpose |
+|--------|-----|------|---------|
+| `router-sync` | none | `provider.{id}`, `policy.{id}` | Providers and policies (source of truth) |
+| `router-sync-state` | 60s | `router.{hostname}` | Agent heartbeats: interfaces, routes, rules |
+| `router-sync-logging` | none | `level.{service_id}` | Runtime log levels (`api`, `agent.r1`, …) |
+
+### What the agent does on each router
+
+1. **On start** — installs priority-10 rule: `from all lookup main suppress_prefixlength 0` (LAN traffic stays in main; only default-route traffic falls through to policy rules). Skips if already present.
+2. **Watches** providers and policies in NATS (`policies.>` / `providers.>` so dotted IDs like `192.168.2.25` match).
+3. **Applies** enabled policies as `ip rule` entries at priority 2000–2032 (`from <src> lookup <table_id>`).
+4. **Publishes** full router state every 5s (all routing tables via netlink, not just `main`).
+5. **On stop** — removes managed policy rules and the suppress-default rule.
+
+Provider **routing tables** (default routes per uplink) are provisioned by **netplan** on each router (`files/r1-netplan.yaml`, `files/r2-netplan.yaml` in `home-router`). The agent owns **policy rules** only.
 
 ## Features
 
-- **Internet Provider Management**: Add, remove, and manage internet service providers with their associated network interfaces and routing tables
-- **Policy-Based Routing**: Create routing policies based on source IP addresses (single IP or CIDR notation)
-- **NATS.io Integration**: Uses NATS.io key-value store for persistent configuration storage
-- **Real-time Synchronization**: Automatic synchronization between NATS KV store and router configuration
-- **REST API**: Full CRUD operations for providers and policies
-- **OpenAPI Documentation**: Auto-generated API documentation with Swagger
-- **Prometheus Metrics**: Comprehensive metrics for monitoring
-- **Netlink Integration**: Uses Linux netlink library for routing table management
-- **Authentication Support**: NATS authentication with username/password or tokens
-- **Persistent Storage**: Configuration survives reboots and power outages
-- **Docker Support**: Containerized deployment with Docker
-- **Graceful Shutdown**: Proper cleanup of routing rules on service termination
-- **Web UI**: Standalone dashboard in [`web/`](web/) (Vite + React), deployable separately from the API
-
-## Web UI
-
-See [`web/README.md`](web/README.md). Quick start:
-
-```bash
-make ui-install
-make ui-dev          # proxies API to :18080
-make ui-docker-build # nginx image; set ROUTER_SYNC_API_URL at run time
-```
-
-## Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Router 1      │    │   Router 2      │    │   Router N      │
-│                 │    │                 │    │                 │
-│ ┌─────────────┐ │    │ ┌─────────────┐ │    │ ┌─────────────┐ │
-│ │ Router Sync │ │    │ │ Router Sync │ │    │ │ Router Sync │ │
-│ │   Service   │ │    │ │   Service   │ │    │ │   Service   │ │
-│ └─────────────┘ │    │ └─────────────┘ │    │ └─────────────┘ │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                    ┌─────────────────┐
-                    │   NATS.io       │
-                    │   KV Store      │
-                    │   (Source of    │
-                    │    Truth)       │
-                    └─────────────────┘
-```
-
-## Prerequisites
-
-- Go 1.21 or later
-- Linux system with root privileges (for netlink operations)
-- NATS.io server (with JetStream enabled)
-- Network interfaces configured
-- Routing tables for each provider already configured
+- **Per-router interface mapping** — `interfaces: {r1: enp1s0, r2: enp2s0}` on each provider; legacy `interface` auto-migrated on API startup.
+- **Policy-based routing** — source IP or CIDR → provider routing table; agents on all routers apply rules locally.
+- **Live router state in the UI** — interfaces, all routing tables (main + provider), `ip rule` list, online indicator.
+- **Runtime log levels per service** — `api`, `agent.r1`, `agent.r2` via API and Settings page.
+- **Web UI** — Dashboard, Routers, Devices, Policies, Providers, Settings ([`web/README.md`](web/README.md)).
+- **Prometheus** — API `:18080/metrics`, agent `:18082/metrics`.
+- **Active/active writes** — generation + `writer_id` conflict resolution on provider/policy updates.
+- **Single Docker image** for API and agent (`router-sync:latest`).
 
 ## Quick Start
 
-### Using Docker (Recommended)
+### Build
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/router-sync.git
-   cd router-sync
-   ```
+```bash
+make build                    # ./build/router-sync
+make run-api                  # API mode locally
+make run-agent                # agent mode (needs NET_ADMIN on Linux)
+make docker-build
+```
 
-2. **Build and run with Docker**
-   ```bash
-   # Build the Docker image
-   make docker-build
-   
-   # Run the container
-   make docker-run
-   ```
+### Run API locally
 
-### Manual Installation
+```bash
+./build/router-sync --mode=api -config config.yaml
+curl http://localhost:18080/health
+curl http://localhost:18080/api/v1/routers
+```
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/router-sync.git
-   cd router-sync
-   ```
+### Run agent locally (Linux only)
 
-2. **Install dependencies**
-   ```bash
-   make deps
-   ```
+```bash
+sudo ./build/router-sync --mode=agent -config config.yaml
+curl http://localhost:18082/health
+```
 
-3. **Build the application**
-   ```bash
-   make build
-   ```
+### Deploy (home-router Ansible)
 
-4. **Install Swagger documentation generator**
-   ```bash
-   make install-tools
-   ```
+See [home-router README](https://github.com/yourusername/home-router) for full steps. Summary:
 
-5. **Generate API documentation**
-   ```bash
-   make docs
-   ```
+```bash
+make r2-nats
+make routers-router-sync-image
+make r2-router-sync-api
+make routers-router-sync-agent
+make r2-router-sync-ui
+# or: make r2-routing-stack-full
+```
 
-### Linux Installation (Systemd Service)
-
-For production deployments on Linux systems, you can install router-sync as a systemd service:
-
-1. **Download the latest release**
-   ```bash
-   # For AMD64 systems
-   wget https://github.com/yourusername/router-sync/releases/latest/download/router-sync-v<VERSION>-linux-amd64.tar.gz
-   
-   # For ARM64 systems
-   wget https://github.com/yourusername/router-sync/releases/latest/download/router-sync-v<VERSION>-linux-arm64.tar.gz
-   ```
-
-2. **Extract and install**
-   ```bash
-   tar -xzf router-sync-v<VERSION>-linux-<ARCH>.tar.gz
-   cd router-sync-v<VERSION>-linux-<ARCH>
-   sudo ./install.sh
-   ```
-
-The installation script will:
-- Detect your system architecture automatically
-- Create a dedicated system user `router-sync`
-- Install the binary to `/usr/local/bin/`
-- Create configuration directory at `/etc/router-sync/`
-- Install and enable the systemd service
-- Start the service automatically
-
-3. **Configure the service**
-   ```bash
-   # Edit the configuration file
-   sudo nano /etc/router-sync/config.yaml
-   
-   # Restart the service after configuration changes
-   sudo systemctl restart router-sync
-   ```
-
-4. **Service management**
-   ```bash
-   # Check service status
-   sudo systemctl status router-sync
-   
-   # View logs
-   sudo journalctl -u router-sync -f
-   
-   # Start/Stop/Restart
-   sudo systemctl start router-sync
-   sudo systemctl stop router-sync
-   sudo systemctl restart router-sync
-   
-   # Enable/Disable auto-start
-   sudo systemctl enable router-sync
-   sudo systemctl disable router-sync
-   ```
-
-For detailed installation instructions and troubleshooting, see the [Linux Installation Guide](scripts/README.md).
+- **UI**: http://192.168.2.252:18081  
+- **API**: http://192.168.2.252:18080 (JSON only — no HTML at `/`)  
+- **Swagger**: http://192.168.2.252:18080/swagger/index.html  
 
 ## Configuration
 
-Create a `config.yaml` file in the same directory as the binary:
+Example `config.yaml` (API mode):
 
 ```yaml
-# Router Sync Configuration
-
-# Log level (debug, info, warn, error)
+mode: api
 log_level: warn
 
-# NATS configuration
 nats:
   urls:
-    - "nats://localhost:4222"
-  username: "your-username"  # Optional
-  password: "your-password"  # Optional
-  token: ""                  # Alternative to username/password
+    - "nats://192.168.2.252:4222"
+  username: "router_sync"
+  password: "your-password"
   cluster_id: "router-sync-cluster"
-  client_id: "router-sync-client"
+  client_id: "router-sync-api"
+  writer_id: "api"
 
-# API server configuration
 api:
-  address: ":8081"  # Default port is 8081
+  address: ":18080"
 
-# Synchronization configuration
 sync:
   interval: 30s
+
+agent:
+  hostname: "r1"              # agent mode only
+  metrics_address: ":18082"
+  state_publish_interval: 5s
 ```
 
-### NATS Configuration
+Environment overrides: `ROUTER_SYNC_MODE`, `ROUTER_SYNC_LOG_LEVEL`, `ROUTER_SYNC_NATS_URL`, `ROUTER_SYNC_AGENT_HOSTNAME`, etc. (see `internal/config/config.go`).
 
-- **urls**: List of NATS server URLs
-- **username/password**: Authentication credentials (optional)
-- **token**: Alternative authentication method (optional)
-- **cluster_id**: NATS cluster identifier
-- **client_id**: Unique client identifier
+## API
 
-## Usage
+Base URL: `http://<host>:18080`
 
-### 1. Start the service
+| Area | Endpoints |
+|------|-----------|
+| Health | `GET /health` |
+| Metrics | `GET /metrics` |
+| Swagger | `GET /swagger/index.html` |
+| Providers | `GET/POST /api/v1/providers`, `GET/PUT/DELETE /api/v1/providers/{id}` |
+| Policies | `GET/POST /api/v1/policies`, `GET/PUT/DELETE /api/v1/policies/{id}` |
+| Routers | `GET /api/v1/routers`, `GET /api/v1/routers/{hostname}`, `.../interfaces`, `.../routes`, `.../rules` |
+| Logging | `GET /api/v1/logging/levels`, `GET/PUT /api/v1/logging/level/{service_id}` |
+| Stats | `GET /api/v1/stats` |
+| Sync | `POST /api/v1/sync` (no-op; agents sync continuously) |
+
+**CIDR policy IDs in URLs** — use underscore instead of slash: `192.168.2.0_25` for `192.168.2.0/25`.
+
+### Create provider (per-router interfaces)
 
 ```bash
-# Using the built binary
-sudo ./build/router-sync -config config.yaml
-
-# Using Docker
-make docker-run
-
-# Using Makefile
-make run
-```
-
-**Note**: Root privileges are required for netlink operations when running directly on the host.
-
-### 2. Access the API
-
-The service exposes a REST API on the configured port (default: 8081).
-
-#### API Endpoints
-
-- **Health Check**: `GET /health`
-- **API Documentation**: `GET /swagger/*`
-- **Prometheus Metrics**: `GET /metrics`
-
-#### Provider Management
-
-- **List Providers**: `GET /api/v1/providers`
-- **Create Provider**: `POST /api/v1/providers`
-- **Get Provider**: `GET /api/v1/providers/{id}`
-- **Update Provider**: `PUT /api/v1/providers/{id}`
-- **Delete Provider**: `DELETE /api/v1/providers/{id}`
-
-#### Policy Management
-
-- **List Policies**: `GET /api/v1/policies`
-- **Create Policy**: `POST /api/v1/policies`
-- **Get Policy**: `GET /api/v1/policies/{id}`
-- **Update Policy**: `PUT /api/v1/policies/{id}`
-- **Delete Policy**: `DELETE /api/v1/policies/{id}`
-
-**Note**: For CIDR-based policy IDs, use underscore (`_`) instead of slash (`/`) in the URL path. For example:
-- Use `192.168.2.0_25` in the URL for policy ID `192.168.2.0/25`
-- Use `10.0.0.0_24` in the URL for policy ID `10.0.0.0/24`
-
-#### System Operations
-
-- **Trigger Sync**: `POST /api/v1/sync`
-- **Get Stats**: `GET /api/v1/stats`
-
-#### API Request Formats
-
-**Create Provider Request:**
-```json
-{
-  "name": "Provider Name",
-  "interface": "eth0",
-  "table_id": 100,
-  "gateway": "192.168.1.1",
-  "description": "Provider description"
-}
-```
-
-**Create Policy Request:**
-```json
-{
-  "name": "Policy Name",
-  "source_ip": "192.168.1.100",
-  "provider_id": "Provider Name",
-  "priority": 100,
-  "description": "Policy description",
-  "enabled": true
-}
-```
-
-**Update Provider Request:**
-```json
-{
-  "name": "Updated Provider Name",
-  "interface": "eth1",
-  "table_id": 101,
-  "gateway": "192.168.1.2",
-  "description": "Updated description"
-}
-```
-
-**Update Policy Request:**
-```json
-{
-  "name": "Updated Policy Name",
-  "source_ip": "192.168.1.101",
-  "provider_id": "Provider Name",
-  "description": "Updated description",
-  "enabled": true
-}
-```
-
-#### Example API Calls
-
-**Create a policy with single IP:**
-```bash
-curl -X POST http://localhost:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Single IP Policy",
-    "source_ip": "192.168.2.24",
-    "provider_id": "Starlink",
-    "description": "Route single IP through Starlink",
-    "enabled": true
-  }'
-```
-
-**Create a policy with CIDR range:**
-```bash
-curl -X POST http://localhost:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "CIDR Policy",
-    "source_ip": "192.168.2.0/25",
-    "provider_id": "Tuenti",
-    "description": "Route CIDR range through Tuenti",
-    "enabled": true
-  }'
-```
-
-**Update a policy with CIDR (note the underscore in URL):**
-```bash
-curl -X PUT http://localhost:8081/api/v1/policies/192.168.2.0_25 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Updated CIDR Policy",
-    "source_ip": "192.168.2.0/25",
-    "provider_id": "Starlink",
-    "description": "Updated description",
-    "enabled": true
-  }'
-```
-
-**Get a policy with CIDR:**
-```bash
-curl http://localhost:8081/api/v1/policies/192.168.2.0_25
-```
-
-**Delete a policy with CIDR:**
-```bash
-curl -X DELETE http://localhost:8081/api/v1/policies/192.168.2.0_25
-```
-
-### 3. Complete Usage Examples
-
-#### Create an Internet Provider
-
-```bash
-curl -X POST http://localhost:8081/api/v1/providers \
-  -H "Content-Type: application/json" \
+curl -X POST http://192.168.2.252:18080/api/v1/providers \
+  -H 'Content-Type: application/json' \
   -d '{
     "name": "Telecom",
-    "interface": "eth0",
-    "table_id": 100,
-    "gateway": "192.168.1.1",
-    "description": "Primary internet connection"
+    "interfaces": {"r1": "enp1s0", "r2": "enp1s0"},
+    "table_id": 99,
+    "gateway": "192.168.4.1",
+    "description": "Primary uplink"
   }'
 ```
 
-Response:
-```json
-{
-  "id": "Telecom",
-  "name": "Telecom",
-  "interface": "eth0",
-  "table_id": 100,
-  "gateway": "192.168.1.1",
-  "description": "Primary internet connection",
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
-}
-```
-
-#### Create a Routing Policy
+### Enable a policy
 
 ```bash
-curl -X POST http://localhost:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
+curl -X PUT http://192.168.2.252:18080/api/v1/policies/192.168.2.25 \
+  -H 'Content-Type: application/json' \
   -d '{
-    "name": "Home Network",
-    "source_ip": "192.168.1.100",
+    "name": "Pancho",
+    "source_ip": "192.168.2.25",
     "provider_id": "Telecom",
-    "priority": 100,
-    "description": "Route home network through primary provider",
     "enabled": true
   }'
 ```
 
-Response:
-```json
-{
-  "id": "192.168.1.100",
-  "name": "Home Network",
-  "provider_id": "Telecom",
-  "priority": 100,
-  "description": "Route home network through primary provider",
-  "enabled": true,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
-}
-```
+Agents pick up changes within a few seconds via NATS watchers.
 
-#### Create a Policy with CIDR Notation
-
-```bash
-curl -X POST http://localhost:8081/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Office Network",
-    "source_ip": "192.168.2.0/24",
-    "provider_id": "Telecom",
-    "priority": 200,
-    "description": "Route office network through primary provider",
-    "enabled": true
-  }'
-```
-
-#### List All Providers
-
-```bash
-curl -X GET http://localhost:8081/api/v1/providers
-```
-
-#### List All Policies
-
-```bash
-curl -X GET http://localhost:8081/api/v1/policies
-```
-
-#### Get a Specific Provider
-
-```bash
-curl -X GET http://localhost:8081/api/v1/providers/Telecom
-```
-
-#### Get a Specific Policy
-
-```bash
-curl -X GET http://localhost:8081/api/v1/policies/192.168.1.100
-```
-
-#### Update a Provider
-
-```bash
-curl -X PUT http://localhost:8081/api/v1/providers/Telecom \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Telecom-Updated",
-    "interface": "eth1",
-    "table_id": 101,
-    "gateway": "192.168.1.2",
-    "description": "Updated primary internet connection"
-  }'
-```
-
-#### Update a Policy
-
-```bash
-curl -X PUT http://localhost:8081/api/v1/policies/192.168.1.100 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Home Network Updated",
-    "source_ip": "192.168.1.101",
-    "provider_id": "Telecom",
-    "priority": 150,
-    "description": "Updated home network routing",
-    "enabled": false
-  }'
-```
-
-#### Delete a Provider
-
-```bash
-curl -X DELETE http://localhost:8081/api/v1/providers/Telecom
-```
-
-#### Delete a Policy
-
-```bash
-curl -X DELETE http://localhost:8081/api/v1/policies/192.168.1.100
-```
-
-#### Trigger Manual Sync
-
-```bash
-curl -X POST http://localhost:8081/api/v1/sync
-```
-
-#### Get System Statistics
-
-```bash
-curl -X GET http://localhost:8081/api/v1/stats
-```
-
-## Data Models
+## Data models
 
 ### InternetProvider
 
 ```json
 {
-  "id": "string",
-  "name": "string",
-  "interface": "string",
-  "table_id": 100,
-  "gateway": "192.168.1.1",
-  "description": "string",
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "id": "Telecom",
+  "name": "Telecom",
+  "interfaces": { "r1": "enp1s0", "r2": "enp1s0" },
+  "table_id": 99,
+  "gateway": "192.168.4.1",
+  "description": "Primary internet connection",
+  "generation": 2,
+  "writer_id": "api"
 }
 ```
 
 ### RoutingPolicy
 
+Policy `id` is the source IP or CIDR (e.g. `192.168.2.25`, `192.168.2.0/25`).
+
 ```json
 {
-  "id": "192.168.1.100",
-  "name": "Home Network",
+  "id": "192.168.2.25",
+  "name": "Pancho",
   "provider_id": "Telecom",
-  "priority": 100,
-  "description": "Route home network through primary provider",
   "enabled": true,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "generation": 6,
+  "writer_id": "api"
 }
 ```
 
-**Note:** The `source_ip` field from the request is used as the policy ID for routing. The `source_ip` must be a valid IP address or CIDR notation (e.g., "192.168.1.100" or "192.168.1.0/24").
+### RouterState (from agent heartbeat)
+
+```json
+{
+  "hostname": "r1",
+  "agent_version": "dev",
+  "log_level": "warning",
+  "last_seen": "2026-05-28T18:45:00Z",
+  "interfaces": [{ "name": "enp1s0", "up": true, "addresses": ["192.168.4.6/24"] }],
+  "tables": [{ "id": 99, "name": "Telecom", "routes": [{ "dst": "default", "gateway": "192.168.4.1" }] }],
+  "rules": [{ "priority": 10, "from": "all", "table": 254 }, { "priority": 2000, "from": "192.168.2.25", "table": 99 }]
+}
+```
 
 ## Monitoring
 
-### Prometheus Metrics
+### API metrics (`:18080/metrics`)
 
-The service exposes the following Prometheus metrics:
+- `http_requests_total`, `http_request_duration_seconds`
+- `providers_total`, `policies_total`
+- `routers_known`, `router_state_age_seconds{hostname}`
+- `log_level_set_total`
 
-- `http_requests_total`: Total HTTP requests by method, endpoint, and status
-- `http_request_duration_seconds`: HTTP request duration
-- `providers_total`: Total number of internet providers
-- `policies_total`: Total number of routing policies
+### Agent metrics (`:18082/metrics`)
 
-### Health Check
+- `agent_sync_total`, `agent_sync_duration_seconds`
+- `agent_rules_total`, `agent_routes_total{table}`
+- `agent_state_publish_total`, `agent_state_publish_errors_total`
+- `agent_conntrack_cleared_total`
 
-```bash
-curl http://localhost:8081/health
+## Project structure
+
 ```
-
-Response:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2023-01-01T00:00:00Z",
-  "service": "router-sync"
-}
+router-sync/
+├── cmd/router-sync/main.go   # --mode dispatch
+├── internal/
+│   ├── agent/                # NATS watchers, sync loop, state publisher
+│   ├── api/                  # Gin HTTP server
+│   ├── config/
+│   ├── logging/              # per-service runtime levels
+│   ├── metrics/
+│   ├── models/
+│   ├── nats/                 # three KV buckets, watchers
+│   ├── router/               # ip rule manager (agent)
+│   └── state/                # netlink collector (linux build tag)
+├── web/                      # React UI
+├── Dockerfile                # single image, API + agent
+├── ARCHITECTURE.md
+├── BLOG.md
+└── Makefile
 ```
 
 ## Development
 
-### Project Structure
-
-```
-router-sync/
-├── main.go                 # Application entry point
-├── config.yaml            # Configuration file
-├── Dockerfile             # Docker container definition
-├── Makefile               # Build and development tasks
-├── go.mod                 # Go module file
-├── go.sum                 # Go module checksums
-├── README.md              # This file
-├── scripts/               # Installation scripts
-│   ├── install.sh         # Linux installation script
-│   ├── router-sync.service # Systemd unit file
-│   ├── README.md          # Installation guide
-│   └── test-install.sh    # Installation test script
-└── internal/
-    ├── api/               # API server and handlers
-    ├── config/            # Configuration management
-    ├── models/            # Data models
-    ├── nats/              # NATS client
-    ├── router/            # Router management (netlink)
-    └── sync/              # Synchronization service
-```
-
-### Development Commands
-
 ```bash
-# Build the application
 make build
-
-# Run tests
 make test
-
-# Run tests with coverage
-make test-coverage
-
-# Run linter
-make lint
-
-# Format code
-make fmt
-
-# Run all checks
-make check
-
-# Generate API documentation
-make docs
-
-# Run locally
-make run
-
-# Run with debug logging
-make run-debug
-
-# Build Docker image
+make run-api
+make run-agent          # Linux + root for netlink
+make ui-install && make ui-dev
 make docker-build
-
-# Run Docker container
-make docker-run
 ```
 
-### Adding New Features
-
-1. Create feature branch
-2. Implement changes
-3. Add tests
-4. Update documentation
-5. Submit pull request
-
-### Creating Releases
-
-The project includes automated release creation with Linux installation packages:
-
-1. **Prepare the release**
-   ```bash
-   # Generate changelog
-   make changelog
-   
-   # Review and commit changelog
-   git add CHANGELOG.md
-   git commit -m "docs: update changelog for v<VERSION>"
-   ```
-
-2. **Bump version**
-   ```bash
-   # Bump patch version (0.0.1 -> 0.0.2)
-   make version-bump-patch
-   
-   # Or bump minor version (0.0.1 -> 0.1.0)
-   make version-bump-minor
-   
-   # Or bump major version (0.0.1 -> 1.0.0)
-   make version-bump-major
-   ```
-
-3. **Create release artifacts**
-   ```bash
-   # Create tar.gz packages with installation scripts
-   make release
-   ```
-
-4. **Create GitHub release**
-   ```bash
-   # Create GitHub release with artifacts
-   make release-github
-   ```
-
-The release process creates:
-- `router-sync-v<VERSION>-linux-amd64.tar.gz` - AMD64 Linux package
-- `router-sync-v<VERSION>-linux-arm64.tar.gz` - ARM64 Linux package
-
-Each package includes:
-- Binary for the target architecture
-- Installation script (`install.sh`)
-- Systemd service file (`router-sync.service`)
-- Default configuration (`config.yaml`)
-- Installation documentation (`README.md`)
-
-## Testing
-
-Run the test suite:
-
-```bash
-make test
-```
-
-Run tests with coverage:
-
-```bash
-make test-coverage
-```
-
-Run tests with race detection:
-
-```bash
-make test-race
-```
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for component diagrams and data flows.
 
 ## Troubleshooting
 
-### Common Issues
+| Issue | Check |
+|-------|--------|
+| `404` at `http://host:18080/` | Expected — use `:18081` for UI or `/health`, `/api/v1/*` for API |
+| Policy not applied on router | Agent logs; `curl :18082/health`; NATS connectivity from router |
+| Provider table empty | Netplan routes (`table: 99` etc.) — agent does not install table routes yet |
+| Router missing in UI | Agent running? `GET /api/v1/routers` — state TTL is 60s |
+| Watcher slow | Fixed: watchers use `policies.>` not `policies.*` for dotted policy IDs |
 
-1. **Permission Denied**: Ensure the service runs with root privileges when running directly on host
-2. **NATS Connection Failed**: Check NATS server configuration and network connectivity
-3. **Interface Not Found**: Verify network interface names exist on the system
-4. **Invalid Gateway**: Ensure gateway IP addresses are valid and reachable
-5. **Port Already in Use**: Check if port 8081 is available or change it in config.yaml
-
-### Logs
-
-The service uses structured logging with different levels:
-
-- **DEBUG**: Detailed debugging information
-- **INFO**: General information about operations
-- **WARN**: Warning messages for non-critical issues
-- **ERROR**: Error messages for critical issues
-
-### Debug Mode
-
-Enable debug logging by setting `log_level: debug` in the configuration file.
-
-## Security Considerations
-
-- Run the service with minimal required privileges
-- Use NATS authentication for production deployments
-- Secure the API endpoints in production environments
-- Regularly update dependencies for security patches
-- Consider using Docker for better isolation
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Ensure all tests pass (`make check`)
-6. Submit a pull request
+Default log level is **warn**. Set per-service via Settings or `PUT /api/v1/logging/level/agent.r1`.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For support and questions:
-
-- Create an issue on GitHub
-- Check the documentation
-- Review the troubleshooting section
-
-## Roadmap
-
-- [x] Docker containerization
-- [x] Graceful shutdown with cleanup
-- [x] Comprehensive Makefile
-- [ ] Web UI for configuration management
-- [ ] Support for IPv6
-- [ ] Advanced routing policies (load balancing, failover)
-- [ ] Integration with monitoring systems
-- [ ] Kubernetes deployment manifests
-- [ ] Configuration validation
-- [ ] Backup and restore functionality 
+MIT License — see LICENSE file.

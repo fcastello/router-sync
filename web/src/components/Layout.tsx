@@ -1,11 +1,12 @@
 import { cn } from "@/lib/utils";
-import { Activity, LayoutDashboard, Network, Route, Server, Settings } from "lucide-react";
+import { Activity, Cpu, LayoutDashboard, Network, Route, Server, Settings } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useHealth } from "@/hooks/useRouterSync";
 import { Badge } from "@/components/ui/badge";
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/routers", label: "Routers", icon: Cpu },
   { to: "/devices", label: "Devices", icon: Network },
   { to: "/policies", label: "Policies", icon: Route },
   { to: "/providers", label: "Providers", icon: Server },

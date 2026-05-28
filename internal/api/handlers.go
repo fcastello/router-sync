@@ -12,24 +12,28 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// CreateProviderRequest represents a request to create a provider
-// The provider ID will be set to the name field
+// CreateProviderRequest represents a request to create a provider.
+// The provider ID will be set to the name field.
+//
+// Either Interface (legacy) or Interfaces (map of hostname -> interface name)
+// can be provided. Interfaces takes precedence and is the preferred form.
 type CreateProviderRequest struct {
-	Name        string `json:"name" binding:"required" example:"Telecom"`
-	Interface   string `json:"interface" binding:"required" example:"eth0"`
-	TableID     int    `json:"table_id" binding:"required,min=1" example:"100"`
-	Gateway     string `json:"gateway" binding:"required" example:"192.168.1.1"`
-	Description string `json:"description" example:"Primary internet connection"`
+	Name        string            `json:"name" binding:"required" example:"Telecom"`
+	Interface   string            `json:"interface" example:"eth0"`
+	Interfaces  map[string]string `json:"interfaces" example:"{\"r1\":\"eth1\",\"r2\":\"eth2\"}"`
+	TableID     int               `json:"table_id" binding:"required,min=1" example:"100"`
+	Gateway     string            `json:"gateway" binding:"required" example:"192.168.1.1"`
+	Description string            `json:"description" example:"Primary internet connection"`
 }
 
-// UpdateProviderRequest represents a request to update a provider
-// If the name is changed, the provider ID will also be updated to match the new name
+// UpdateProviderRequest mirrors CreateProviderRequest.
 type UpdateProviderRequest struct {
-	Name        string `json:"name" binding:"required" example:"Telecom"`
-	Interface   string `json:"interface" binding:"required" example:"eth0"`
-	TableID     int    `json:"table_id" binding:"required,min=1" example:"100"`
-	Gateway     string `json:"gateway" binding:"required" example:"192.168.1.1"`
-	Description string `json:"description" example:"Primary internet connection"`
+	Name        string            `json:"name" binding:"required" example:"Telecom"`
+	Interface   string            `json:"interface" example:"eth0"`
+	Interfaces  map[string]string `json:"interfaces"`
+	TableID     int               `json:"table_id" binding:"required,min=1" example:"100"`
+	Gateway     string            `json:"gateway" binding:"required" example:"192.168.1.1"`
+	Description string            `json:"description" example:"Primary internet connection"`
 }
 
 // CreatePolicyRequest represents a request to create a policy
@@ -43,13 +47,25 @@ type CreatePolicyRequest struct {
 }
 
 // UpdatePolicyRequest represents a request to update a policy
-// The source_ip will be used as the policy ID for routing
 type UpdatePolicyRequest struct {
 	Name        string `json:"name" binding:"required" example:"Home Network"`
 	SourceIP    string `json:"source_ip" binding:"required" example:"192.168.1.100"`
 	ProviderID  string `json:"provider_id" binding:"required" example:"provider-123"`
 	Description string `json:"description" example:"Route home network through primary provider"`
 	Enabled     bool   `json:"enabled" example:"true"`
+}
+
+// normalizeInterfaces returns a sanitized Interfaces map applying the migration rule:
+// if Interfaces is empty but Interface is set, fall back to Interface for legacy callers.
+// Returns the canonical Interfaces map and the (possibly empty) deprecated Interface value.
+func normalizeInterfaces(ifaces map[string]string, legacy string) map[string]string {
+	out := make(map[string]string)
+	for k, v := range ifaces {
+		if k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // listProviders lists all internet providers
@@ -95,7 +111,6 @@ func (s *Server) createProvider(c *gin.Context) {
 		return
 	}
 
-	// Check if a provider with the same name already exists
 	existingProvider, err := s.natsClient.GetProvider(req.Name)
 	if err == nil && existingProvider != nil {
 		c.JSON(http.StatusConflict, gin.H{
@@ -105,10 +120,13 @@ func (s *Server) createProvider(c *gin.Context) {
 		return
 	}
 
+	ifaces := normalizeInterfaces(req.Interfaces, req.Interface)
+
 	now := time.Now()
 	provider := &models.InternetProvider{
 		ID:          req.Name,
 		Name:        req.Name,
+		Interfaces:  ifaces,
 		Interface:   req.Interface,
 		TableID:     req.TableID,
 		Gateway:     req.Gateway,
@@ -185,7 +203,6 @@ func (s *Server) updateProvider(c *gin.Context) {
 		return
 	}
 
-	// Get existing provider
 	existing, err := s.natsClient.GetProvider(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -195,9 +212,9 @@ func (s *Server) updateProvider(c *gin.Context) {
 		return
 	}
 
-	// If the name is being changed, check for conflicts and handle ID change
+	ifaces := normalizeInterfaces(req.Interfaces, req.Interface)
+
 	if existing.Name != req.Name {
-		// Check if a provider with the new name already exists
 		conflictingProvider, err := s.natsClient.GetProvider(req.Name)
 		if err == nil && conflictingProvider != nil {
 			c.JSON(http.StatusConflict, gin.H{
@@ -207,7 +224,6 @@ func (s *Server) updateProvider(c *gin.Context) {
 			return
 		}
 
-		// Delete the old provider (with old ID)
 		if err := s.natsClient.DeleteProvider(existing.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "Failed to update provider",
@@ -216,23 +232,18 @@ func (s *Server) updateProvider(c *gin.Context) {
 			return
 		}
 
-		// Create new provider with new ID
 		existing.ID = req.Name
 		existing.Name = req.Name
-		existing.Interface = req.Interface
-		existing.TableID = req.TableID
-		existing.Gateway = req.Gateway
-		existing.Description = req.Description
-		existing.UpdatedAt = time.Now()
 	} else {
-		// Update fields without changing ID
 		existing.Name = req.Name
-		existing.Interface = req.Interface
-		existing.TableID = req.TableID
-		existing.Gateway = req.Gateway
-		existing.Description = req.Description
-		existing.UpdatedAt = time.Now()
 	}
+
+	existing.Interfaces = ifaces
+	existing.Interface = req.Interface
+	existing.TableID = req.TableID
+	existing.Gateway = req.Gateway
+	existing.Description = req.Description
+	existing.UpdatedAt = time.Now()
 
 	if err := existing.Validate(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -336,7 +347,6 @@ func (s *Server) createPolicy(c *gin.Context) {
 		return
 	}
 
-	// Verify provider exists
 	if _, err := s.natsClient.GetProvider(req.ProviderID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Provider not found",
@@ -404,7 +414,6 @@ func (s *Server) updatePolicy(c *gin.Context) {
 		return
 	}
 
-	// Get existing policy
 	existing, err := s.natsClient.GetPolicy(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -414,7 +423,6 @@ func (s *Server) updatePolicy(c *gin.Context) {
 		return
 	}
 
-	// Update fields
 	existing.Name = req.Name
 	existing.ID = req.SourceIP
 	existing.ProviderID = req.ProviderID
@@ -430,7 +438,6 @@ func (s *Server) updatePolicy(c *gin.Context) {
 		return
 	}
 
-	// Verify provider exists
 	if _, err := s.natsClient.GetProvider(req.ProviderID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Provider not found",

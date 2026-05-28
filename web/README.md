@@ -10,13 +10,13 @@ npm install
 npm run dev
 ```
 
-By default, dev uses `.env.development.local` to proxy `/api` and `/health` to R2 at `http://192.168.2.252:18080`. Override in that file or:
+By default, dev proxies `/api` and `/health` to R2 at `http://192.168.2.252:18080`. Override in `.env.development.local` or:
 
 ```bash
 VITE_API_PROXY=http://192.168.2.252:18080 npm run dev
 ```
 
-Or set the API URL in **Settings** (stored in `localStorage`).
+You can also set the API base URL in **Settings** (stored in `localStorage`).
 
 ## Production build
 
@@ -27,16 +27,12 @@ npm run preview
 
 ## Docker
 
-Build and run pointing at your API:
-
 ```bash
 docker build -t router-sync-ui:latest ./web
-docker run --rm -p 8080:80 \
+docker run --rm -p 18081:80 \
   -e ROUTER_SYNC_API_URL=http://192.168.2.252:18080 \
   router-sync-ui:latest
 ```
-
-Open http://localhost:8080
 
 ## Deploy on R2 (Ansible)
 
@@ -46,16 +42,23 @@ From `home-router`:
 make r2-router-sync-ui
 ```
 
-Serves the UI on port **18081** with `ROUTER_SYNC_API_URL` set to the R2 management IP API (`:18080`).
+Serves on port **18081** with `ROUTER_SYNC_API_URL` pointing at the API on `:18080`.
 
-## Features
+## Pages
 
-| View | Description |
+| Page | Description |
 |------|-------------|
-| **Dashboard** | API health, provider uplinks, policy allocation chart, sync stats |
-| **Devices** | Policy list with local friendly names and tags |
-| **Policies** | Sentence-style policy builder, enable/disable toggles (optimistic) |
-| **Providers** | CRUD for internet uplinks |
-| **Settings** | Runtime API base URL |
+| **Dashboard** | API health, online routers, provider→interface badges, traffic allocation chart (**enabled policies only**), recent policies |
+| **Routers** | Per-router live state: interfaces, **all routing tables** (main + provider tables by name), IP rules, agent version, online dot |
+| **Devices** | Policy list with friendly names and tags |
+| **Policies** | Policy builder, enable/disable (optimistic updates) |
+| **Providers** | CRUD uplinks; one interface field per discovered router; warnings for missing mappings |
+| **Settings** | API base URL; runtime log level per service (`api`, `agent.r1`, `agent.r2`) |
 
-The UI polls health every 5s and stats every 10s.
+Polling: health ~5s, stats/routers ~10s.
+
+## Notes
+
+- Open **http://&lt;router&gt;:18081** for the UI. Port **18080** is the API only (no HTML at `/`).
+- Traffic allocation counts only policies with `enabled: true`.
+- Router table names (e.g. `Telecom (#99)`) come from provider `table_id` when the agent reports routes in that table.
