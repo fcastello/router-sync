@@ -97,10 +97,9 @@ export interface CreatePolicyRequest {
   favorite?: boolean;
 }
 
+/** Browser-local metadata per policy (tags only; display name lives on the policy in NATS). */
 export interface DeviceMeta {
-  friendlyName?: string;
   tags: string[];
-  mac?: string;
 }
 
 export type DeviceMetaMap = Record<string, DeviceMeta>;

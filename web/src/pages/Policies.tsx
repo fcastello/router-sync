@@ -7,7 +7,9 @@ import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { queryKeys, usePolicies, usePolicyMutations, useProviders } from "@/hooks/useRouterSync";
 import { fuzzyMatch } from "@/lib/fuzzy";
+import { migrateLocalDisplayNames } from "@/lib/migrate-display-names";
 import { migrateLocalPolicyFavorites } from "@/lib/migrate-policy-favorites";
+import { policyBody } from "@/lib/policy-body";
 import { displayPolicyId } from "@/lib/policy-id";
 import { sortPolicies, type PolicySortKey } from "@/lib/policy-sort";
 import type { CreatePolicyRequest, RoutingPolicy } from "@/types/api";
@@ -24,18 +26,6 @@ const emptyForm = {
   favorite: false,
 };
 
-function policyBody(policy: RoutingPolicy, patch: Partial<CreatePolicyRequest> = {}): CreatePolicyRequest {
-  return {
-    name: policy.name,
-    source_ip: policy.id,
-    provider_id: policy.provider_id,
-    description: policy.description,
-    enabled: policy.enabled,
-    favorite: policy.favorite ?? false,
-    ...patch,
-  };
-}
-
 export function PoliciesPage() {
   const policies = usePolicies();
   const providers = useProviders();
@@ -50,7 +40,10 @@ export function PoliciesPage() {
 
   useEffect(() => {
     if (!policyList.length) return;
-    migrateLocalPolicyFavorites(policyList)
+    Promise.all([
+      migrateLocalPolicyFavorites(policyList),
+      migrateLocalDisplayNames(policyList),
+    ])
       .then(() => qc.invalidateQueries({ queryKey: queryKeys.policies }))
       .catch(() => {
         /* ignore migration errors */

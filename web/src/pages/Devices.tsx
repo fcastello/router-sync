@@ -4,23 +4,44 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { usePolicies, useProviders } from "@/hooks/useRouterSync";
-import { allTags, loadDeviceMeta, updateDeviceMeta } from "@/lib/device-meta";
+import {
+  queryKeys,
+  useDeviceMeta,
+  usePolicies,
+  usePolicyMutations,
+  useProviders,
+} from "@/hooks/useRouterSync";
+import { allTags, updateDeviceMeta } from "@/lib/device-meta";
+import { migrateLocalDisplayNames } from "@/lib/migrate-display-names";
+import { policyBody } from "@/lib/policy-body";
 import { displayPolicyId } from "@/lib/policy-id";
 import { useQueryClient } from "@tanstack/react-query";
-import { queryKeys } from "@/hooks/useRouterSync";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export function DevicesPage() {
   const policies = usePolicies();
   const providers = useProviders();
+  const { update } = usePolicyMutations();
   const qc = useQueryClient();
+  const { data: meta = {} } = useDeviceMeta();
   const [tagFilter, setTagFilter] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
-  const [form, setForm] = useState({ friendlyName: "", mac: "", tags: "" });
+  const [form, setForm] = useState({ name: "", tags: "" });
 
-  const meta = loadDeviceMeta();
+  const policyList = policies.data ?? [];
   const tags = allTags(meta);
+
+  useEffect(() => {
+    if (!policyList.length) return;
+    migrateLocalDisplayNames(policyList)
+      .then(() => {
+        qc.invalidateQueries({ queryKey: queryKeys.policies });
+        qc.invalidateQueries({ queryKey: queryKeys.deviceMeta });
+      })
+      .catch(() => {
+        /* ignore migration errors */
+      });
+  }, [policyList, qc]);
 
   const providerMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -28,30 +49,34 @@ export function DevicesPage() {
     return m;
   }, [providers.data]);
 
-  const rows = (policies.data ?? []).map((p) => {
-    const dm = meta[p.id] || { tags: [] };
-    return { policy: p, meta: dm };
-  });
+  const rows = policyList.map((policy) => ({
+    policy,
+    tags: meta[policy.id]?.tags ?? [],
+  }));
 
-  const filtered = tagFilter
-    ? rows.filter((r) => r.meta.tags?.includes(tagFilter))
-    : rows;
+  const filtered = tagFilter ? rows.filter((r) => r.tags.includes(tagFilter)) : rows;
 
   const startEdit = (policyId: string) => {
-    const dm = meta[policyId] || { tags: [] };
+    const policy = policyList.find((p) => p.id === policyId);
+    if (!policy) return;
     setEditing(policyId);
     setForm({
-      friendlyName: dm.friendlyName ?? "",
-      mac: dm.mac ?? "",
-      tags: (dm.tags ?? []).join(", "),
+      name: policy.name,
+      tags: (meta[policyId]?.tags ?? []).join(", "),
     });
   };
 
   const save = () => {
     if (!editing) return;
+    const policy = policyList.find((p) => p.id === editing);
+    if (!policy) return;
+
+    const name = form.name.trim();
+    if (name && name !== policy.name) {
+      update.mutate({ id: editing, body: policyBody(policy, { name }) });
+    }
+
     updateDeviceMeta(editing, {
-      friendlyName: form.friendlyName || undefined,
-      mac: form.mac || undefined,
       tags: form.tags
         .split(",")
         .map((t) => t.trim())
@@ -64,9 +89,10 @@ export function DevicesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Device registry</h1>
+        <h1 className="text-2xl font-semibold">Devices</h1>
         <p className="text-sm text-muted-foreground">
-          Policies map source IPs/CIDRs to routes. Friendly names and tags are stored in this browser until a backend registry exists.
+          Same policies as on the Policies page. Display names are stored in NATS; tags are
+          optional labels kept in this browser only.
         </p>
       </div>
 
@@ -93,40 +119,48 @@ export function DevicesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-muted-foreground">
-                <th className="pb-2 pr-4">Friendly name</th>
+                <th className="pb-2 pr-4">Display name</th>
                 <th className="pb-2 pr-4">Source IP / CIDR</th>
-                <th className="pb-2 pr-4">MAC</th>
                 <th className="pb-2 pr-4">Tags</th>
                 <th className="pb-2 pr-4">Route</th>
-                <th className="pb-2">Status</th>
+                <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2" />
               </tr>
             </thead>
             <tbody>
-              {filtered.map(({ policy, meta: dm }) => (
+              {filtered.map(({ policy, tags: rowTags }) => (
                 <tr key={policy.id} className="border-b border-border/60">
                   <td className="py-3 pr-4 font-medium">
-                    {dm.friendlyName || policy.name}
-                    {!policy.enabled && (
-                      <Badge variant="muted" className="ml-2">
-                        policy off
+                    {policy.name}
+                    {policy.favorite && (
+                      <Badge variant="default" className="ml-2">
+                        favorite
                       </Badge>
                     )}
                   </td>
-                  <td className="py-3 pr-4 font-mono text-xs">
-                    {displayPolicyId(policy.id)}
-                  </td>
-                  <td className="py-3 pr-4 text-xs">{dm.mac || "—"}</td>
+                  <td className="py-3 pr-4 font-mono text-xs">{displayPolicyId(policy.id)}</td>
                   <td className="py-3 pr-4">
                     <div className="flex flex-wrap gap-1">
-                      {(dm.tags ?? []).map((t) => (
-                        <Badge key={t} variant="default">
-                          {t}
-                        </Badge>
-                      ))}
+                      {rowTags.length > 0 ? (
+                        rowTags.map((t) => (
+                          <Badge key={t} variant="default">
+                            {t}
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </div>
                   </td>
                   <td className="py-3 pr-4">
                     {providerMap.get(policy.provider_id) ?? policy.provider_id}
+                  </td>
+                  <td className="py-3 pr-4">
+                    {policy.enabled ? (
+                      <Badge variant="default">Override on</Badge>
+                    ) : (
+                      <Badge variant="muted">Off</Badge>
+                    )}
                   </td>
                   <td className="py-3">
                     <Button variant="ghost" className="h-8 px-2" onClick={() => startEdit(policy.id)}>
@@ -139,7 +173,7 @@ export function DevicesPage() {
           </table>
           {filtered.length === 0 && (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No policies yet. Create one on the Policies page to register a device.
+              No policies yet. Create one on the Policies page.
             </p>
           )}
         </CardContent>
@@ -148,26 +182,22 @@ export function DevicesPage() {
       {editing && (
         <Card>
           <CardHeader>
-            <CardTitle>Edit device metadata</CardTitle>
+            <CardTitle>Edit device</CardTitle>
           </CardHeader>
           <CardContent className="grid max-w-md gap-3">
             <div>
-              <Label>Friendly name</Label>
+              <Label>Display name</Label>
               <Input
-                value={form.friendlyName}
-                onChange={(e) => setForm((f) => ({ ...f, friendlyName: e.target.value }))}
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                required
               />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Saved to NATS — also shown on the Policies page.
+              </p>
             </div>
             <div>
-              <Label>MAC (local only)</Label>
-              <Input
-                value={form.mac}
-                onChange={(e) => setForm((f) => ({ ...f, mac: e.target.value }))}
-                placeholder="aa:bb:cc:dd:ee:ff"
-              />
-            </div>
-            <div>
-              <Label>Tags (comma-separated)</Label>
+              <Label>Tags (comma-separated, browser only)</Label>
               <Input
                 value={form.tags}
                 onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
@@ -175,11 +205,16 @@ export function DevicesPage() {
               />
             </div>
             <div className="flex gap-2">
-              <Button onClick={save}>Save</Button>
+              <Button onClick={save} disabled={update.isPending || !form.name.trim()}>
+                Save
+              </Button>
               <Button variant="outline" onClick={() => setEditing(null)}>
                 Cancel
               </Button>
             </div>
+            {update.isError && (
+              <p className="text-sm text-destructive">{(update.error as Error).message}</p>
+            )}
           </CardContent>
         </Card>
       )}

@@ -30,13 +30,10 @@ export async function migrateLocalPolicyFavorites(policies: RoutingPolicy[]): Pr
       enabled: policy.enabled,
       favorite: true,
     });
-    const entry = nextMeta[policy.id] as { favorite?: boolean; friendlyName?: string; tags?: string[]; mac?: string } | undefined;
+    const entry = nextMeta[policy.id] as { favorite?: boolean; tags?: string[] } | undefined;
     if (entry) {
       const { favorite: _removed, ...rest } = entry;
-      const hasData =
-        rest.friendlyName ||
-        rest.mac ||
-        (rest.tags && rest.tags.length > 0);
+      const hasData = rest.tags && rest.tags.length > 0;
       if (hasData) {
         nextMeta[policy.id] = { tags: [], ...rest };
       } else {
