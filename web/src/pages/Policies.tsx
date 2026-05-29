@@ -125,6 +125,10 @@ export function PoliciesPage() {
     });
   };
 
+  const renamePolicy = (policy: RoutingPolicy, name: string) => {
+    update.mutate({ id: policy.id, body: policyBody(policy, { name }) });
+  };
+
   const renderPolicyRow = (policy: RoutingPolicy, compact?: boolean) => (
     <PolicyRow
       key={policy.id}
@@ -134,6 +138,7 @@ export function PoliciesPage() {
       onToggleFavorite={() => toggleFavorite(policy)}
       onToggleEnabled={() => toggleEnabled(policy)}
       onChangeProvider={(providerId) => changeProvider(policy, providerId)}
+      onRename={(name) => renamePolicy(policy, name)}
       onDelete={() => {
         if (confirm(`Delete policy for ${displayPolicyId(policy.id)}?`)) {
           remove.mutate(policy.id);
@@ -149,8 +154,8 @@ export function PoliciesPage() {
       <div>
         <h1 className="text-2xl font-semibold">Policy builder</h1>
         <p className="text-sm text-muted-foreground">
-          Route traffic by source IP or CIDR through a chosen uplink. Star policies to pin them in
-          the favorites section (stored in NATS with the policy).
+          Route traffic by source IP or CIDR through a chosen uplink. Edit display names with the
+          pencil icon (saved in NATS). Star policies for the favorites section.
         </p>
       </div>
 
