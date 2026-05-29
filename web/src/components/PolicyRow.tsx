@@ -1,12 +1,11 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { PolicyDisplayName } from "@/components/PolicyDisplayName";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { displayPolicyId } from "@/lib/policy-id";
 import type { InternetProvider, RoutingPolicy } from "@/types/api";
-import { Pencil, Star, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Trash2 } from "lucide-react";
 
 type PolicyRowProps = {
   policy: RoutingPolicy;
@@ -34,45 +33,6 @@ export function PolicyRow({
   compact,
 }: PolicyRowProps) {
   const isOverride = policy.enabled;
-  const [editingName, setEditingName] = useState(false);
-  const [draftName, setDraftName] = useState(policy.name);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!editingName) {
-      setDraftName(policy.name);
-    }
-  }, [policy.name, editingName]);
-
-  useEffect(() => {
-    if (editingName) {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }
-  }, [editingName]);
-
-  const startEditing = () => {
-    if (updatePending) return;
-    setDraftName(policy.name);
-    setEditingName(true);
-  };
-
-  const cancelEditing = () => {
-    setDraftName(policy.name);
-    setEditingName(false);
-  };
-
-  const commitRename = () => {
-    const trimmed = draftName.trim();
-    setEditingName(false);
-    if (!trimmed) {
-      setDraftName(policy.name);
-      return;
-    }
-    if (trimmed !== policy.name) {
-      onRename(trimmed);
-    }
-  };
 
   return (
     <div
@@ -84,68 +44,13 @@ export function PolicyRow({
     >
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-8 w-8 shrink-0 p-0"
-            onClick={onToggleFavorite}
-            title={isFavorite ? "Remove from favorites" : "Add to favorites"}
-            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
-            aria-pressed={isFavorite}
-          >
-            <Star
-              className={`h-4 w-4 ${isFavorite ? "fill-amber-400 text-amber-400" : "text-muted-foreground"}`}
-            />
-          </Button>
-          {editingName ? (
-            <div className="flex min-w-0 flex-1 items-center gap-1">
-              <Input
-                ref={inputRef}
-                className="h-8 max-w-xs text-sm"
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    commitRename();
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    cancelEditing();
-                  }
-                }}
-                onBlur={commitRename}
-                disabled={updatePending}
-                aria-label="Display name"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-8 w-8 shrink-0 p-0"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={cancelEditing}
-                title="Cancel"
-                aria-label="Cancel rename"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          ) : (
-            <div className="flex min-w-0 items-center gap-1">
-              <span className="truncate font-medium">{policy.name}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-8 w-8 shrink-0 p-0 text-muted-foreground"
-                onClick={startEditing}
-                title="Edit display name"
-                aria-label="Edit display name"
-                disabled={updatePending}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          )}
+          <PolicyDisplayName
+            name={policy.name}
+            isFavorite={isFavorite}
+            onToggleFavorite={onToggleFavorite}
+            onRename={onRename}
+            disabled={updatePending}
+          />
           {isOverride ? (
             <Badge variant="default">Override</Badge>
           ) : (

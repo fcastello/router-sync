@@ -1,5 +1,4 @@
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { DeviceRow } from "@/components/DeviceRow";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,11 +11,21 @@ import {
   useProviders,
 } from "@/hooks/useRouterSync";
 import { allTags, updateDeviceMeta } from "@/lib/device-meta";
+import { fuzzyMatch } from "@/lib/fuzzy";
 import { migrateLocalDisplayNames } from "@/lib/migrate-display-names";
+import { migrateLocalPolicyFavorites } from "@/lib/migrate-policy-favorites";
 import { policyBody } from "@/lib/policy-body";
 import { displayPolicyId } from "@/lib/policy-id";
+import { sortPolicies, type PolicySortKey } from "@/lib/policy-sort";
+import type { RoutingPolicy } from "@/types/api";
 import { useQueryClient } from "@tanstack/react-query";
+import { Search, Star } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+
+type DeviceEntry = {
+  policy: RoutingPolicy;
+  tags: string[];
+};
 
 export function DevicesPage() {
   const policies = usePolicies();
@@ -24,16 +33,19 @@ export function DevicesPage() {
   const { update } = usePolicyMutations();
   const qc = useQueryClient();
   const { data: meta = {} } = useDeviceMeta();
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<PolicySortKey>("name");
   const [tagFilter, setTagFilter] = useState("");
-  const [editing, setEditing] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", tags: "" });
 
   const policyList = policies.data ?? [];
-  const tags = allTags(meta);
+  const knownTags = allTags(meta);
 
   useEffect(() => {
     if (!policyList.length) return;
-    migrateLocalDisplayNames(policyList)
+    Promise.all([
+      migrateLocalPolicyFavorites(policyList),
+      migrateLocalDisplayNames(policyList),
+    ])
       .then(() => {
         qc.invalidateQueries({ queryKey: queryKeys.policies });
         qc.invalidateQueries({ queryKey: queryKeys.deviceMeta });
@@ -49,175 +61,169 @@ export function DevicesPage() {
     return m;
   }, [providers.data]);
 
-  const rows = policyList.map((policy) => ({
-    policy,
-    tags: meta[policy.id]?.tags ?? [],
-  }));
+  const allEntries: DeviceEntry[] = useMemo(
+    () =>
+      policyList.map((policy) => ({
+        policy,
+        tags: meta[policy.id]?.tags ?? [],
+      })),
+    [policyList, meta],
+  );
 
-  const filtered = tagFilter ? rows.filter((r) => r.tags.includes(tagFilter)) : rows;
-
-  const startEdit = (policyId: string) => {
-    const policy = policyList.find((p) => p.id === policyId);
-    if (!policy) return;
-    setEditing(policyId);
-    setForm({
-      name: policy.name,
-      tags: (meta[policyId]?.tags ?? []).join(", "),
+  const displayedEntries = useMemo(() => {
+    const q = search.trim();
+    let list = allEntries.filter(({ policy, tags: rowTags }) => {
+      if (tagFilter && !rowTags.includes(tagFilter)) {
+        return false;
+      }
+      const providerName = providerMap.get(policy.provider_id) ?? policy.provider_id;
+      return fuzzyMatch(
+        q,
+        policy.name,
+        displayPolicyId(policy.id),
+        policy.id,
+        policy.description,
+        providerName,
+        ...rowTags,
+        policy.enabled ? "enabled on active override" : "disabled off default",
+        policy.favorite ? "favorite starred" : "",
+      );
     });
-  };
+    const sorted = sortPolicies(
+      list.map((e) => e.policy),
+      sortBy,
+    );
+    const order = new Map(sorted.map((p, i) => [p.id, i]));
+    return [...list].sort(
+      (a, b) => (order.get(a.policy.id) ?? 0) - (order.get(b.policy.id) ?? 0),
+    );
+  }, [allEntries, search, sortBy, tagFilter, providerMap]);
 
-  const save = () => {
-    if (!editing) return;
-    const policy = policyList.find((p) => p.id === editing);
-    if (!policy) return;
-
-    const name = form.name.trim();
-    if (name && name !== policy.name) {
-      update.mutate({ id: editing, body: policyBody(policy, { name }) });
+  const { favoriteEntries, otherEntries } = useMemo(() => {
+    const favorites: DeviceEntry[] = [];
+    const others: DeviceEntry[] = [];
+    for (const entry of displayedEntries) {
+      if (entry.policy.favorite) {
+        favorites.push(entry);
+      } else {
+        others.push(entry);
+      }
     }
+    return { favoriteEntries: favorites, otherEntries: others };
+  }, [displayedEntries]);
 
-    updateDeviceMeta(editing, {
-      tags: form.tags
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean),
-    });
-    qc.invalidateQueries({ queryKey: queryKeys.deviceMeta });
-    setEditing(null);
+  const renamePolicy = (policy: RoutingPolicy, name: string) => {
+    update.mutate({ id: policy.id, body: policyBody(policy, { name }) });
   };
+
+  const toggleFavorite = (policy: RoutingPolicy) => {
+    update.mutate({
+      id: policy.id,
+      body: policyBody(policy, { favorite: !policy.favorite }),
+    });
+  };
+
+  const saveTags = (policyId: string, tags: string[]) => {
+    updateDeviceMeta(policyId, { tags });
+    qc.invalidateQueries({ queryKey: queryKeys.deviceMeta });
+  };
+
+  const renderDeviceRow = ({ policy, tags: rowTags }: DeviceEntry, compact?: boolean) => (
+    <DeviceRow
+      key={policy.id}
+      policy={policy}
+      tags={rowTags}
+      providerName={providerMap.get(policy.provider_id) ?? policy.provider_id}
+      onToggleFavorite={() => toggleFavorite(policy)}
+      onRename={(name) => renamePolicy(policy, name)}
+      onSaveTags={(nextTags) => saveTags(policy.id, nextTags)}
+      disabled={update.isPending}
+      compact={compact}
+    />
+  );
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Devices</h1>
         <p className="text-sm text-muted-foreground">
-          Same policies as on the Policies page. Display names are stored in NATS; tags are
-          optional labels kept in this browser only.
+          Same policies as on the Policies page — search, sort, and favorites work the same way.
+          Tags are optional browser-only labels.
         </p>
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-          <CardTitle>Devices ({filtered.length})</CardTitle>
-          <div className="flex items-center gap-2">
-            <Label>Filter tag</Label>
-            <Select
-              value={tagFilter}
-              onChange={(e) => setTagFilter(e.target.value)}
-              className="w-40"
-            >
-              <option value="">All</option>
-              {tags.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </Select>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle>
+              Devices ({displayedEntries.length}
+              {search.trim() || tagFilter ? ` of ${policyList.length}` : ""})
+            </CardTitle>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="relative min-w-[200px] flex-1">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="Search name, IP, provider, tags…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="w-40">
+              <Label>Sort by</Label>
+              <Select value={sortBy} onChange={(e) => setSortBy(e.target.value as PolicySortKey)}>
+                <option value="name">Name</option>
+                <option value="subnet">Subnet (specific first)</option>
+                <option value="status">Status (active first)</option>
+              </Select>
+            </div>
+            <div className="w-40">
+              <Label>Filter tag</Label>
+              <Select
+                value={tagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+              >
+                <option value="">All</option>
+                {knownTags.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </Select>
+            </div>
           </div>
         </CardHeader>
-        <CardContent className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-muted-foreground">
-                <th className="pb-2 pr-4">Display name</th>
-                <th className="pb-2 pr-4">Source IP / CIDR</th>
-                <th className="pb-2 pr-4">Tags</th>
-                <th className="pb-2 pr-4">Route</th>
-                <th className="pb-2 pr-4">Status</th>
-                <th className="pb-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(({ policy, tags: rowTags }) => (
-                <tr key={policy.id} className="border-b border-border/60">
-                  <td className="py-3 pr-4 font-medium">
-                    {policy.name}
-                    {policy.favorite && (
-                      <Badge variant="default" className="ml-2">
-                        favorite
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="py-3 pr-4 font-mono text-xs">{displayPolicyId(policy.id)}</td>
-                  <td className="py-3 pr-4">
-                    <div className="flex flex-wrap gap-1">
-                      {rowTags.length > 0 ? (
-                        rowTags.map((t) => (
-                          <Badge key={t} variant="default">
-                            {t}
-                          </Badge>
-                        ))
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-3 pr-4">
-                    {providerMap.get(policy.provider_id) ?? policy.provider_id}
-                  </td>
-                  <td className="py-3 pr-4">
-                    {policy.enabled ? (
-                      <Badge variant="default">Override on</Badge>
-                    ) : (
-                      <Badge variant="muted">Off</Badge>
-                    )}
-                  </td>
-                  <td className="py-3">
-                    <Button variant="ghost" className="h-8 px-2" onClick={() => startEdit(policy.id)}>
-                      Edit
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {filtered.length === 0 && (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              No policies yet. Create one on the Policies page.
-            </p>
+        <CardContent className="space-y-6">
+          {favoriteEntries.length > 0 && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
+                <h2 className="text-sm font-semibold">Favorites ({favoriteEntries.length})</h2>
+              </div>
+              <div className="space-y-2">
+                {favoriteEntries.map((e) => renderDeviceRow(e, true))}
+              </div>
+            </section>
+          )}
+
+          {(favoriteEntries.length > 0 || otherEntries.length > 0) && (
+            <section className="space-y-3">
+              {favoriteEntries.length > 0 && otherEntries.length > 0 && (
+                <h2 className="text-sm font-semibold text-muted-foreground">All devices</h2>
+              )}
+              <div className="space-y-3">{otherEntries.map((e) => renderDeviceRow(e, false))}</div>
+            </section>
+          )}
+
+          {policyList.length === 0 && (
+            <p className="text-sm text-muted-foreground">No policies yet. Create one on the Policies page.</p>
+          )}
+          {policyList.length > 0 && displayedEntries.length === 0 && (
+            <p className="text-sm text-muted-foreground">No devices match your search or filters.</p>
           )}
         </CardContent>
       </Card>
-
-      {editing && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Edit device</CardTitle>
-          </CardHeader>
-          <CardContent className="grid max-w-md gap-3">
-            <div>
-              <Label>Display name</Label>
-              <Input
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                required
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Saved to NATS — also shown on the Policies page.
-              </p>
-            </div>
-            <div>
-              <Label>Tags (comma-separated, browser only)</Label>
-              <Input
-                value={form.tags}
-                onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
-                placeholder="IoT, Kids, Work"
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={save} disabled={update.isPending || !form.name.trim()}>
-                Save
-              </Button>
-              <Button variant="outline" onClick={() => setEditing(null)}>
-                Cancel
-              </Button>
-            </div>
-            {update.isError && (
-              <p className="text-sm text-destructive">{(update.error as Error).message}</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
