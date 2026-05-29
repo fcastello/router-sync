@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-29
+
+[1.1.0]: https://github.com/fcastello/router-sync/compare/v1.0.0...v1.1.0
+
+### Added
+
+- **Policy favorites** — `favorite` field persisted in NATS; pinned section on Policies and Devices.
+- **Policy tags** — `tags` array on policies (API + NATS); tag filter on Policies and Devices; one-time migration from browser `localStorage`.
+- **Policy description** — inline edit on Policies and Devices (stored in NATS).
+- **Display names** — inline rename on Policies; Devices uses `policy.name` from NATS.
+- **Policies UX** — default route and nav item; compact **+** form for new policies.
+
+### Changed
+
+- Devices page aligned with Policies (search, sort, favorites, card layout).
+- `device-meta` localStorage reduced to migration-only helpers.
+
+### Fixed
+
+- Devices page no longer shows stale browser-only display names.
+
 ## [1.0.0] - 2026-05-28
 
 [1.0.0]: https://github.com/fcastello/router-sync/compare/v0.1.0...v1.0.0
