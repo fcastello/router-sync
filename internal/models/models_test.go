@@ -1,6 +1,7 @@
 package models
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -219,6 +220,7 @@ func TestRoutingPolicy_JSON(t *testing.T) {
 		Name:        "Test Policy",
 		ProviderID:  "provider-1",
 		Description: "Test description",
+		Tags:        []string{"iot", "kids"},
 		Enabled:     true,
 		CreatedAt:   time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 		UpdatedAt:   time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -251,6 +253,9 @@ func TestRoutingPolicy_JSON(t *testing.T) {
 	}
 	if policy.Description != newPolicy.Description {
 		t.Errorf("Description mismatch: got %v, want %v", newPolicy.Description, policy.Description)
+	}
+	if !reflect.DeepEqual(policy.Tags, newPolicy.Tags) {
+		t.Errorf("Tags mismatch: got %v, want %v", newPolicy.Tags, policy.Tags)
 	}
 	if policy.Enabled != newPolicy.Enabled {
 		t.Errorf("Enabled mismatch: got %v, want %v", newPolicy.Enabled, policy.Enabled)

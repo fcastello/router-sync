@@ -279,6 +279,8 @@ Policy `id` is the source IP or CIDR (e.g. `192.168.2.25`, `192.168.2.0/25`).
   "id": "192.168.2.25",
   "name": "Pancho",
   "provider_id": "Telecom",
+  "description": "Kids tablet",
+  "tags": ["kids", "iot"],
   "enabled": true,
   "favorite": true,
   "generation": 6,
@@ -286,7 +288,7 @@ Policy `id` is the source IP or CIDR (e.g. `192.168.2.25`, `192.168.2.0/25`).
 }
 ```
 
-`favorite` is UI metadata stored in NATS with the policy (agents ignore it).
+`description`, `tags`, and `favorite` are UI metadata stored in NATS with the policy (agents ignore them).
 
 ### RouterState (from agent heartbeat)
 

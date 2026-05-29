@@ -19,6 +19,7 @@ export interface RoutingPolicy {
   name: string;
   provider_id: string;
   description?: string;
+  tags?: string[];
   enabled: boolean;
   favorite?: boolean;
   generation?: number;
@@ -93,16 +94,10 @@ export interface CreatePolicyRequest {
   source_ip: string;
   provider_id: string;
   description?: string;
+  tags?: string[];
   enabled: boolean;
   favorite?: boolean;
 }
-
-/** Browser-local metadata per policy (tags only; display name lives on the policy in NATS). */
-export interface DeviceMeta {
-  tags: string[];
-}
-
-export type DeviceMetaMap = Record<string, DeviceMeta>;
 
 export interface NetworkInterface {
   name: string;

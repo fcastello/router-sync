@@ -28,10 +28,10 @@ export async function migrateLocalDisplayNames(policies: RoutingPolicy[]): Promi
     }
 
     if (legacy) {
-      const { friendlyName: _fn, mac: _mac, ...rest } = legacy;
-      const hasTags = (rest.tags?.length ?? 0) > 0;
-      if (hasTags) {
-        nextMeta[policy.id] = { tags: rest.tags ?? [] };
+      const { friendlyName: _fn, mac: _mac, tags: _tags, ...rest } = legacy;
+      const hasRemaining = Object.keys(rest).length > 0;
+      if (hasRemaining) {
+        nextMeta[policy.id] = rest;
       } else {
         delete nextMeta[policy.id];
       }

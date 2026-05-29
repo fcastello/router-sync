@@ -1,40 +1,30 @@
-import type { DeviceMeta, DeviceMetaMap } from "@/types/api";
+/** Legacy browser-local metadata (tags/favorites/display names). Used only by one-time migrations. */
 
 const KEY = "router-sync-device-meta";
 
-export function loadDeviceMeta(): DeviceMetaMap {
+export type LegacyDeviceMeta = {
+  tags?: string[];
+  favorite?: boolean;
+  friendlyName?: string;
+  mac?: string;
+};
+
+export type LegacyDeviceMetaMap = Record<string, LegacyDeviceMeta>;
+
+export function loadDeviceMeta(): LegacyDeviceMetaMap {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return {};
-    return JSON.parse(raw) as DeviceMetaMap;
+    return JSON.parse(raw) as LegacyDeviceMetaMap;
   } catch {
     return {};
   }
 }
 
-export function saveDeviceMeta(map: DeviceMetaMap) {
+export function saveDeviceMeta(map: LegacyDeviceMetaMap) {
   localStorage.setItem(KEY, JSON.stringify(map));
 }
 
-export function getDeviceMeta(policyId: string): DeviceMeta {
-  const map = loadDeviceMeta();
-  return map[policyId] || { tags: [] };
-}
-
-export function updateDeviceMeta(policyId: string, patch: Partial<DeviceMeta>) {
-  const map = loadDeviceMeta();
-  const current = map[policyId] || { tags: [] };
-  map[policyId] = {
-    ...current,
-    ...patch,
-    tags: patch.tags ?? current.tags,
-  };
-  saveDeviceMeta(map);
-  return map[policyId];
-}
-
-export function allTags(map: DeviceMetaMap): string[] {
-  const tags = new Set<string>();
-  Object.values(map).forEach((m) => m.tags?.forEach((t) => tags.add(t)));
-  return [...tags].sort();
+export function clearDeviceMeta() {
+  localStorage.removeItem(KEY);
 }

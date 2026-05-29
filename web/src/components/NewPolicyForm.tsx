@@ -11,6 +11,7 @@ export type NewPolicyFormState = {
   source_ip: string;
   provider_id: string;
   description: string;
+  tags: string;
   enabled: boolean;
   favorite: boolean;
 };
@@ -91,6 +92,14 @@ export function NewPolicyForm({
             placeholder="Description (optional)"
             value={form.description}
             onChange={(e) => onChange({ description: e.target.value })}
+          />
+        </div>
+        <div className="min-w-[140px] flex-1">
+          <Input
+            className="h-8"
+            placeholder="Tags (comma-separated)"
+            value={form.tags}
+            onChange={(e) => onChange({ tags: e.target.value })}
           />
         </div>
         <label className="flex items-center gap-2 text-xs">

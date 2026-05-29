@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { loadDeviceMeta } from "@/lib/device-meta";
 import type { CreatePolicyRequest, CreateProviderRequest } from "@/types/api";
 
 export const queryKeys = {
@@ -10,7 +9,6 @@ export const queryKeys = {
   policies: ["policies"] as const,
   routers: ["routers"] as const,
   router: (hostname: string) => ["router", hostname] as const,
-  deviceMeta: ["deviceMeta"] as const,
   logLevel: ["logLevel"] as const,
   logLevels: ["logLevels"] as const,
 };
@@ -63,14 +61,6 @@ export function useRouter(hostname: string, pollMs = 10000) {
   });
 }
 
-export function useDeviceMeta() {
-  return useQuery({
-    queryKey: queryKeys.deviceMeta,
-    queryFn: async () => loadDeviceMeta(),
-    initialData: loadDeviceMeta(),
-  });
-}
-
 export function useProviderMutations() {
   const qc = useQueryClient();
   const invalidate = () => {
@@ -118,6 +108,8 @@ export function usePolicyMutations() {
                   enabled: body.enabled,
                   provider_id: body.provider_id,
                   name: body.name,
+                  description: body.description,
+                  tags: body.tags,
                   favorite: body.favorite,
                 }
               : p,

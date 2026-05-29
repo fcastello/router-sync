@@ -9,8 +9,10 @@ import { queryKeys, usePolicies, usePolicyMutations, useProviders } from "@/hook
 import { fuzzyMatch } from "@/lib/fuzzy";
 import { migrateLocalDisplayNames } from "@/lib/migrate-display-names";
 import { migrateLocalPolicyFavorites } from "@/lib/migrate-policy-favorites";
+import { migrateLocalPolicyTags } from "@/lib/migrate-policy-tags";
 import { policyBody } from "@/lib/policy-body";
 import { displayPolicyId } from "@/lib/policy-id";
+import { allPolicyTags, normalizeTags, parseTagsInput } from "@/lib/policy-tags";
 import { sortPolicies, type PolicySortKey } from "@/lib/policy-sort";
 import type { CreatePolicyRequest, RoutingPolicy } from "@/types/api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,6 +24,7 @@ const emptyForm: NewPolicyFormState = {
   source_ip: "",
   provider_id: "",
   description: "",
+  tags: "",
   enabled: true,
   favorite: false,
 };
@@ -35,15 +38,18 @@ export function PoliciesPage() {
   const [showNewPolicy, setShowNewPolicy] = useState(false);
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<PolicySortKey>("name");
+  const [tagFilter, setTagFilter] = useState("");
 
   const providerList = providers.data ?? [];
   const policyList = policies.data ?? [];
+  const knownTags = allPolicyTags(policyList);
 
   useEffect(() => {
     if (!policyList.length) return;
     Promise.all([
-      migrateLocalPolicyFavorites(policyList),
       migrateLocalDisplayNames(policyList),
+      migrateLocalPolicyFavorites(policyList),
+      migrateLocalPolicyTags(policyList),
     ])
       .then(() => qc.invalidateQueries({ queryKey: queryKeys.policies }))
       .catch(() => {
@@ -60,6 +66,10 @@ export function PoliciesPage() {
   const displayedPolicies = useMemo(() => {
     const q = search.trim();
     let list = policyList.filter((policy) => {
+      const tags = normalizeTags(policy.tags);
+      if (tagFilter && !tags.includes(tagFilter)) {
+        return false;
+      }
       const providerName = providerNameById.get(policy.provider_id) ?? policy.provider_id;
       return fuzzyMatch(
         q,
@@ -67,6 +77,7 @@ export function PoliciesPage() {
         displayPolicyId(policy.id),
         policy.id,
         policy.description,
+        ...tags,
         providerName,
         policy.enabled ? "enabled on active override" : "disabled off default",
         policy.favorite ? "favorite starred" : "",
@@ -74,7 +85,7 @@ export function PoliciesPage() {
     });
     list = sortPolicies(list, sortBy);
     return list;
-  }, [policyList, search, sortBy, providerNameById]);
+  }, [policyList, search, sortBy, tagFilter, providerNameById]);
 
   const { favoritePolicies, otherPolicies } = useMemo(() => {
     const favorites: RoutingPolicy[] = [];
@@ -91,11 +102,13 @@ export function PoliciesPage() {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    const tags = parseTagsInput(form.tags);
     const body: CreatePolicyRequest = {
       name: form.name,
       source_ip: form.source_ip.trim(),
       provider_id: form.provider_id,
       description: form.description || undefined,
+      tags: tags.length > 0 ? tags : undefined,
       enabled: form.enabled,
       favorite: form.favorite,
     };
@@ -136,6 +149,14 @@ export function PoliciesPage() {
     update.mutate({ id: policy.id, body: policyBody(policy, { name }) });
   };
 
+  const saveDescription = (policy: RoutingPolicy, description: string) => {
+    update.mutate({ id: policy.id, body: policyBody(policy, { description }) });
+  };
+
+  const saveTags = (policy: RoutingPolicy, tags: string[]) => {
+    update.mutate({ id: policy.id, body: policyBody(policy, { tags }) });
+  };
+
   const renderPolicyRow = (policy: RoutingPolicy, compact?: boolean) => (
     <PolicyRow
       key={policy.id}
@@ -146,6 +167,8 @@ export function PoliciesPage() {
       onToggleEnabled={() => toggleEnabled(policy)}
       onChangeProvider={(providerId) => changeProvider(policy, providerId)}
       onRename={(name) => renamePolicy(policy, name)}
+      onSaveDescription={(description) => saveDescription(policy, description)}
+      onSaveTags={(tags) => saveTags(policy, tags)}
       onDelete={() => {
         if (confirm(`Delete policy for ${displayPolicyId(policy.id)}?`)) {
           remove.mutate(policy.id);
@@ -162,7 +185,7 @@ export function PoliciesPage() {
         <h1 className="text-2xl font-semibold">Policy builder</h1>
         <p className="text-sm text-muted-foreground">
           Route traffic by source IP or CIDR through a chosen uplink. Use + to add a policy; edit
-          names with the pencil (saved in NATS). Star policies for favorites.
+          names, descriptions, and tags with the pencil (saved in NATS). Star policies for favorites.
         </p>
       </div>
 
@@ -171,7 +194,7 @@ export function PoliciesPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle>
               Policies ({displayedPolicies.length}
-              {search.trim() ? ` of ${policyList.length}` : ""})
+              {search.trim() || tagFilter ? ` of ${policyList.length}` : ""})
             </CardTitle>
             <Button
               type="button"
@@ -190,7 +213,7 @@ export function PoliciesPage() {
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 className="pl-9"
-                placeholder="Search name, IP, provider…"
+                placeholder="Search name, IP, provider, tags…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -201,6 +224,17 @@ export function PoliciesPage() {
                 <option value="name">Name</option>
                 <option value="subnet">Subnet (specific first)</option>
                 <option value="status">Status (active first)</option>
+              </Select>
+            </div>
+            <div className="w-40">
+              <Label>Filter tag</Label>
+              <Select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
+                <option value="">All</option>
+                {knownTags.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
               </Select>
             </div>
           </div>
@@ -243,7 +277,7 @@ export function PoliciesPage() {
             </p>
           )}
           {policyList.length > 0 && displayedPolicies.length === 0 && (
-            <p className="text-sm text-muted-foreground">No policies match your search.</p>
+            <p className="text-sm text-muted-foreground">No policies match your search or filters.</p>
           )}
         </CardContent>
       </Card>

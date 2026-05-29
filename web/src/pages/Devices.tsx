@@ -3,53 +3,40 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import {
-  queryKeys,
-  useDeviceMeta,
-  usePolicies,
-  usePolicyMutations,
-  useProviders,
-} from "@/hooks/useRouterSync";
-import { allTags, updateDeviceMeta } from "@/lib/device-meta";
+import { queryKeys, usePolicies, usePolicyMutations, useProviders } from "@/hooks/useRouterSync";
 import { fuzzyMatch } from "@/lib/fuzzy";
 import { migrateLocalDisplayNames } from "@/lib/migrate-display-names";
 import { migrateLocalPolicyFavorites } from "@/lib/migrate-policy-favorites";
+import { migrateLocalPolicyTags } from "@/lib/migrate-policy-tags";
 import { policyBody } from "@/lib/policy-body";
 import { displayPolicyId } from "@/lib/policy-id";
+import { allPolicyTags, normalizeTags } from "@/lib/policy-tags";
 import { sortPolicies, type PolicySortKey } from "@/lib/policy-sort";
 import type { RoutingPolicy } from "@/types/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { Search, Star } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-type DeviceEntry = {
-  policy: RoutingPolicy;
-  tags: string[];
-};
-
 export function DevicesPage() {
   const policies = usePolicies();
   const providers = useProviders();
   const { update } = usePolicyMutations();
   const qc = useQueryClient();
-  const { data: meta = {} } = useDeviceMeta();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<PolicySortKey>("name");
   const [tagFilter, setTagFilter] = useState("");
 
   const policyList = policies.data ?? [];
-  const knownTags = allTags(meta);
+  const knownTags = allPolicyTags(policyList);
 
   useEffect(() => {
     if (!policyList.length) return;
     Promise.all([
-      migrateLocalPolicyFavorites(policyList),
       migrateLocalDisplayNames(policyList),
+      migrateLocalPolicyFavorites(policyList),
+      migrateLocalPolicyTags(policyList),
     ])
-      .then(() => {
-        qc.invalidateQueries({ queryKey: queryKeys.policies });
-        qc.invalidateQueries({ queryKey: queryKeys.deviceMeta });
-      })
+      .then(() => qc.invalidateQueries({ queryKey: queryKeys.policies }))
       .catch(() => {
         /* ignore migration errors */
       });
@@ -61,19 +48,11 @@ export function DevicesPage() {
     return m;
   }, [providers.data]);
 
-  const allEntries: DeviceEntry[] = useMemo(
-    () =>
-      policyList.map((policy) => ({
-        policy,
-        tags: meta[policy.id]?.tags ?? [],
-      })),
-    [policyList, meta],
-  );
-
-  const displayedEntries = useMemo(() => {
+  const displayedPolicies = useMemo(() => {
     const q = search.trim();
-    let list = allEntries.filter(({ policy, tags: rowTags }) => {
-      if (tagFilter && !rowTags.includes(tagFilter)) {
+    let list = policyList.filter((policy) => {
+      const tags = normalizeTags(policy.tags);
+      if (tagFilter && !tags.includes(tagFilter)) {
         return false;
       }
       const providerName = providerMap.get(policy.provider_id) ?? policy.provider_id;
@@ -83,34 +62,27 @@ export function DevicesPage() {
         displayPolicyId(policy.id),
         policy.id,
         policy.description,
+        ...tags,
         providerName,
-        ...rowTags,
         policy.enabled ? "enabled on active override" : "disabled off default",
         policy.favorite ? "favorite starred" : "",
       );
     });
-    const sorted = sortPolicies(
-      list.map((e) => e.policy),
-      sortBy,
-    );
-    const order = new Map(sorted.map((p, i) => [p.id, i]));
-    return [...list].sort(
-      (a, b) => (order.get(a.policy.id) ?? 0) - (order.get(b.policy.id) ?? 0),
-    );
-  }, [allEntries, search, sortBy, tagFilter, providerMap]);
+    return sortPolicies(list, sortBy);
+  }, [policyList, search, sortBy, tagFilter, providerMap]);
 
-  const { favoriteEntries, otherEntries } = useMemo(() => {
-    const favorites: DeviceEntry[] = [];
-    const others: DeviceEntry[] = [];
-    for (const entry of displayedEntries) {
-      if (entry.policy.favorite) {
-        favorites.push(entry);
+  const { favoritePolicies, otherPolicies } = useMemo(() => {
+    const favorites: RoutingPolicy[] = [];
+    const others: RoutingPolicy[] = [];
+    for (const policy of displayedPolicies) {
+      if (policy.favorite) {
+        favorites.push(policy);
       } else {
-        others.push(entry);
+        others.push(policy);
       }
     }
-    return { favoriteEntries: favorites, otherEntries: others };
-  }, [displayedEntries]);
+    return { favoritePolicies: favorites, otherPolicies: others };
+  }, [displayedPolicies]);
 
   const renamePolicy = (policy: RoutingPolicy, name: string) => {
     update.mutate({ id: policy.id, body: policyBody(policy, { name }) });
@@ -123,20 +95,23 @@ export function DevicesPage() {
     });
   };
 
-  const saveTags = (policyId: string, tags: string[]) => {
-    updateDeviceMeta(policyId, { tags });
-    qc.invalidateQueries({ queryKey: queryKeys.deviceMeta });
+  const saveDescription = (policy: RoutingPolicy, description: string) => {
+    update.mutate({ id: policy.id, body: policyBody(policy, { description }) });
   };
 
-  const renderDeviceRow = ({ policy, tags: rowTags }: DeviceEntry, compact?: boolean) => (
+  const saveTags = (policy: RoutingPolicy, tags: string[]) => {
+    update.mutate({ id: policy.id, body: policyBody(policy, { tags }) });
+  };
+
+  const renderDeviceRow = (policy: RoutingPolicy, compact?: boolean) => (
     <DeviceRow
       key={policy.id}
       policy={policy}
-      tags={rowTags}
       providerName={providerMap.get(policy.provider_id) ?? policy.provider_id}
       onToggleFavorite={() => toggleFavorite(policy)}
       onRename={(name) => renamePolicy(policy, name)}
-      onSaveTags={(nextTags) => saveTags(policy.id, nextTags)}
+      onSaveDescription={(description) => saveDescription(policy, description)}
+      onSaveTags={(tags) => saveTags(policy, tags)}
       disabled={update.isPending}
       compact={compact}
     />
@@ -147,8 +122,8 @@ export function DevicesPage() {
       <div>
         <h1 className="text-2xl font-semibold">Devices</h1>
         <p className="text-sm text-muted-foreground">
-          Same policies as on the Policies page — search, sort, and favorites work the same way.
-          Tags are optional browser-only labels.
+          Same policies as on the Policies page — search, sort, tags, and favorites are stored in
+          NATS.
         </p>
       </div>
 
@@ -156,7 +131,7 @@ export function DevicesPage() {
         <CardHeader className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle>
-              Devices ({displayedEntries.length}
+              Devices ({displayedPolicies.length}
               {search.trim() || tagFilter ? ` of ${policyList.length}` : ""})
             </CardTitle>
           </div>
@@ -180,10 +155,7 @@ export function DevicesPage() {
             </div>
             <div className="w-40">
               <Label>Filter tag</Label>
-              <Select
-                value={tagFilter}
-                onChange={(e) => setTagFilter(e.target.value)}
-              >
+              <Select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
                 <option value="">All</option>
                 {knownTags.map((t) => (
                   <option key={t} value={t}>
@@ -195,31 +167,31 @@ export function DevicesPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
-          {favoriteEntries.length > 0 && (
+          {favoritePolicies.length > 0 && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
                 <Star className="h-4 w-4 fill-amber-400 text-amber-400" aria-hidden />
-                <h2 className="text-sm font-semibold">Favorites ({favoriteEntries.length})</h2>
+                <h2 className="text-sm font-semibold">Favorites ({favoritePolicies.length})</h2>
               </div>
               <div className="space-y-2">
-                {favoriteEntries.map((e) => renderDeviceRow(e, true))}
+                {favoritePolicies.map((p) => renderDeviceRow(p, true))}
               </div>
             </section>
           )}
 
-          {(favoriteEntries.length > 0 || otherEntries.length > 0) && (
+          {(favoritePolicies.length > 0 || otherPolicies.length > 0) && (
             <section className="space-y-3">
-              {favoriteEntries.length > 0 && otherEntries.length > 0 && (
+              {favoritePolicies.length > 0 && otherPolicies.length > 0 && (
                 <h2 className="text-sm font-semibold text-muted-foreground">All devices</h2>
               )}
-              <div className="space-y-3">{otherEntries.map((e) => renderDeviceRow(e, false))}</div>
+              <div className="space-y-3">{otherPolicies.map((p) => renderDeviceRow(p, false))}</div>
             </section>
           )}
 
           {policyList.length === 0 && (
             <p className="text-sm text-muted-foreground">No policies yet. Create one on the Policies page.</p>
           )}
-          {policyList.length > 0 && displayedEntries.length === 0 && (
+          {policyList.length > 0 && displayedPolicies.length === 0 && (
             <p className="text-sm text-muted-foreground">No devices match your search or filters.</p>
           )}
         </CardContent>
