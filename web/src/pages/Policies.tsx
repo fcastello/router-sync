@@ -1,10 +1,10 @@
+import { NewPolicyForm, type NewPolicyFormState } from "@/components/NewPolicyForm";
 import { PolicyRow } from "@/components/PolicyRow";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { queryKeys, usePolicies, usePolicyMutations, useProviders } from "@/hooks/useRouterSync";
 import { fuzzyMatch } from "@/lib/fuzzy";
 import { migrateLocalDisplayNames } from "@/lib/migrate-display-names";
@@ -14,10 +14,10 @@ import { displayPolicyId } from "@/lib/policy-id";
 import { sortPolicies, type PolicySortKey } from "@/lib/policy-sort";
 import type { CreatePolicyRequest, RoutingPolicy } from "@/types/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { Search, Star } from "lucide-react";
+import { Plus, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-const emptyForm = {
+const emptyForm: NewPolicyFormState = {
   name: "",
   source_ip: "",
   provider_id: "",
@@ -32,6 +32,7 @@ export function PoliciesPage() {
   const { create, update, remove } = usePolicyMutations();
   const qc = useQueryClient();
   const [form, setForm] = useState(emptyForm);
+  const [showNewPolicy, setShowNewPolicy] = useState(false);
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<PolicySortKey>("name");
 
@@ -99,8 +100,21 @@ export function PoliciesPage() {
       favorite: form.favorite,
     };
     create.mutate(body, {
-      onSuccess: () => setForm(emptyForm),
+      onSuccess: () => {
+        setForm(emptyForm);
+        setShowNewPolicy(false);
+      },
     });
+  };
+
+  const openNewPolicy = () => {
+    setForm(emptyForm);
+    setShowNewPolicy(true);
+  };
+
+  const cancelNewPolicy = () => {
+    setForm(emptyForm);
+    setShowNewPolicy(false);
   };
 
   const toggleEnabled = (policy: RoutingPolicy) => {
@@ -147,93 +161,10 @@ export function PoliciesPage() {
       <div>
         <h1 className="text-2xl font-semibold">Policy builder</h1>
         <p className="text-sm text-muted-foreground">
-          Route traffic by source IP or CIDR through a chosen uplink. Edit display names with the
-          pencil icon (saved in NATS). Star policies for the favorites section.
+          Route traffic by source IP or CIDR through a chosen uplink. Use + to add a policy; edit
+          names with the pencil (saved in NATS). Star policies for favorites.
         </p>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>New policy</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={submit} className="space-y-4">
-            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-border bg-muted/40 p-4 text-sm">
-              <span className="text-muted-foreground">Route</span>
-              <div className="min-w-[140px] flex-1">
-                <Label className="sr-only">Device / source</Label>
-                <Input
-                  placeholder="192.168.1.50 or 192.168.1.0/24"
-                  value={form.source_ip}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      source_ip: e.target.value,
-                      name: f.name || e.target.value,
-                    }))
-                  }
-                  required
-                />
-              </div>
-              <span className="text-muted-foreground">named</span>
-              <div className="min-w-[120px] flex-1">
-                <Input
-                  placeholder="Living Room TV"
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  required
-                />
-              </div>
-              <span className="text-muted-foreground">via</span>
-              <div className="min-w-[140px]">
-                <Select
-                  value={form.provider_id}
-                  onChange={(e) => setForm((f) => ({ ...f, provider_id: e.target.value }))}
-                  required
-                >
-                  <option value="">Select uplink…</option>
-                  {providerList.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <Label>Description (optional)</Label>
-                <Input
-                  value={form.description}
-                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-6 pt-6">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={form.enabled}
-                    onCheckedChange={(enabled) => setForm((f) => ({ ...f, enabled }))}
-                  />
-                  <Label>Enabled on create</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={form.favorite}
-                    onCheckedChange={(favorite) => setForm((f) => ({ ...f, favorite }))}
-                  />
-                  <Label>Favorite</Label>
-                </div>
-              </div>
-            </div>
-            <Button type="submit" disabled={create.isPending || !form.provider_id}>
-              Add policy
-            </Button>
-            {create.isError && (
-              <p className="text-sm text-destructive">{(create.error as Error).message}</p>
-            )}
-          </form>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader className="space-y-3">
@@ -242,6 +173,17 @@ export function PoliciesPage() {
               Policies ({displayedPolicies.length}
               {search.trim() ? ` of ${policyList.length}` : ""})
             </CardTitle>
+            <Button
+              type="button"
+              variant={showNewPolicy ? "secondary" : "default"}
+              className="h-9 w-9 shrink-0 p-0"
+              onClick={() => (showNewPolicy ? cancelNewPolicy() : openNewPolicy())}
+              title={showNewPolicy ? "Cancel new policy" : "Add policy"}
+              aria-label={showNewPolicy ? "Cancel new policy" : "Add policy"}
+              aria-expanded={showNewPolicy}
+            >
+              {showNewPolicy ? <span className="text-lg leading-none">×</span> : <Plus className="h-5 w-5" />}
+            </Button>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div className="relative min-w-[200px] flex-1">
@@ -264,6 +206,18 @@ export function PoliciesPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          {showNewPolicy && (
+            <NewPolicyForm
+              form={form}
+              providers={providerList}
+              onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+              onSubmit={submit}
+              onCancel={cancelNewPolicy}
+              pending={create.isPending}
+              error={create.isError ? (create.error as Error) : null}
+            />
+          )}
+
           {favoritePolicies.length > 0 && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
@@ -283,8 +237,10 @@ export function PoliciesPage() {
             </section>
           )}
 
-          {policyList.length === 0 && (
-            <p className="text-sm text-muted-foreground">No policies configured.</p>
+          {policyList.length === 0 && !showNewPolicy && (
+            <p className="text-sm text-muted-foreground">
+              No policies yet. Click + to add one.
+            </p>
           )}
           {policyList.length > 0 && displayedPolicies.length === 0 && (
             <p className="text-sm text-muted-foreground">No policies match your search.</p>
