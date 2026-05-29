@@ -50,6 +50,7 @@ type RoutingPolicy struct {
 	ProviderID  string    `json:"provider_id" yaml:"provider_id"`
 	Description string    `json:"description,omitempty" yaml:"description,omitempty"`
 	Enabled     bool      `json:"enabled" yaml:"enabled"`
+	Favorite    bool      `json:"favorite" yaml:"favorite"`
 	Generation  uint64    `json:"generation" yaml:"generation"`
 	WriterID    string    `json:"writer_id" yaml:"writer_id"`
 	CreatedAt   time.Time `json:"created_at" yaml:"created_at"`

@@ -44,6 +44,7 @@ type CreatePolicyRequest struct {
 	ProviderID  string `json:"provider_id" binding:"required" example:"provider-123"`
 	Description string `json:"description" example:"Route home network through primary provider"`
 	Enabled     bool   `json:"enabled" example:"true"`
+	Favorite    bool   `json:"favorite" example:"false"`
 }
 
 // UpdatePolicyRequest represents a request to update a policy
@@ -53,6 +54,7 @@ type UpdatePolicyRequest struct {
 	ProviderID  string `json:"provider_id" binding:"required" example:"provider-123"`
 	Description string `json:"description" example:"Route home network through primary provider"`
 	Enabled     bool   `json:"enabled" example:"true"`
+	Favorite    bool   `json:"favorite" example:"false"`
 }
 
 // normalizeInterfaces returns a sanitized Interfaces map applying the migration rule:
@@ -335,6 +337,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 		ProviderID:  req.ProviderID,
 		Description: req.Description,
 		Enabled:     req.Enabled,
+		Favorite:    req.Favorite,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -428,6 +431,7 @@ func (s *Server) updatePolicy(c *gin.Context) {
 	existing.ProviderID = req.ProviderID
 	existing.Description = req.Description
 	existing.Enabled = req.Enabled
+	existing.Favorite = req.Favorite
 	existing.UpdatedAt = time.Now()
 
 	if err := existing.Validate(); err != nil {

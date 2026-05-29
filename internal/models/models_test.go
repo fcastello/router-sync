@@ -255,4 +255,27 @@ func TestRoutingPolicy_JSON(t *testing.T) {
 	if policy.Enabled != newPolicy.Enabled {
 		t.Errorf("Enabled mismatch: got %v, want %v", newPolicy.Enabled, policy.Enabled)
 	}
+	if policy.Favorite != newPolicy.Favorite {
+		t.Errorf("Favorite mismatch: got %v, want %v", newPolicy.Favorite, policy.Favorite)
+	}
+}
+
+func TestRoutingPolicy_FavoriteJSON(t *testing.T) {
+	policy := &RoutingPolicy{
+		ID:         "10.0.0.1",
+		Name:       "Fav",
+		ProviderID: "p1",
+		Favorite:   true,
+	}
+	data, err := policy.ToJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded RoutingPolicy
+	if err := decoded.FromJSON(data); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Favorite {
+		t.Errorf("expected favorite true, got %v", decoded.Favorite)
+	}
 }

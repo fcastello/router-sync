@@ -118,6 +118,7 @@ export function usePolicyMutations() {
                   enabled: body.enabled,
                   provider_id: body.provider_id,
                   name: body.name,
+                  favorite: body.favorite,
                 }
               : p,
           ),

@@ -280,10 +280,13 @@ Policy `id` is the source IP or CIDR (e.g. `192.168.2.25`, `192.168.2.0/25`).
   "name": "Pancho",
   "provider_id": "Telecom",
   "enabled": true,
+  "favorite": true,
   "generation": 6,
   "writer_id": "api"
 }
 ```
+
+`favorite` is UI metadata stored in NATS with the policy (agents ignore it).
 
 ### RouterState (from agent heartbeat)
 

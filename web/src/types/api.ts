@@ -20,6 +20,7 @@ export interface RoutingPolicy {
   provider_id: string;
   description?: string;
   enabled: boolean;
+  favorite?: boolean;
   generation?: number;
   writer_id?: string;
   created_at?: string;
@@ -93,6 +94,7 @@ export interface CreatePolicyRequest {
   provider_id: string;
   description?: string;
   enabled: boolean;
+  favorite?: boolean;
 }
 
 export interface DeviceMeta {
