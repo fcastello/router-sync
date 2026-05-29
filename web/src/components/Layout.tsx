@@ -5,10 +5,10 @@ import { useHealth } from "@/hooks/useRouterSync";
 import { Badge } from "@/components/ui/badge";
 
 const nav = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/", label: "Policies", icon: Route },
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/routers", label: "Routers", icon: Cpu },
   { to: "/devices", label: "Devices", icon: Network },
-  { to: "/policies", label: "Policies", icon: Route },
   { to: "/providers", label: "Providers", icon: Server },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

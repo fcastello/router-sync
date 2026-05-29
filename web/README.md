@@ -51,10 +51,10 @@ Open **http://&lt;host&gt;:18081**. Set `ROUTER_SYNC_API_URL` to the Router Sync
 
 | Page | Description |
 |------|-------------|
+| **Policies** (default) | Policy builder, favorites, enable/disable (optimistic updates) |
 | **Dashboard** | API health, online routers, provider→interface badges, traffic allocation chart (**enabled policies only**), recent policies |
 | **Routers** | Per-router live state: interfaces, **all routing tables** (main + provider tables by name), IP rules, agent version, online dot |
-| **Devices** | Policy list with friendly names and tags |
-| **Policies** | Policy builder, enable/disable (optimistic updates) |
+| **Devices** | Same policies as Policies, with browser-local tags |
 | **Providers** | CRUD uplinks; one interface field per discovered router; warnings for missing mappings |
 | **Settings** | API base URL; runtime log level per service (`api`, `agent.r1`, `agent.r2`) |
 
