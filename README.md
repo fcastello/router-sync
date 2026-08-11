@@ -8,38 +8,39 @@ The same binary runs in one of two modes selected at runtime by `--mode`:
 
 | Mode | Where | Network | Responsibilities |
 |------|-------|---------|------------------|
-| **`--mode=api`** | R2 (or any host) | Published port `:18080`, no NET_ADMIN | REST API, Swagger, metrics; reads/writes NATS only |
+| **`--mode=api`** | R2 (or any host) | Published port `:18080`, no NET_ADMIN | REST API, Swagger, metrics, optional MCP `/mcp`; reads/writes NATS only |
 | **`--mode=agent`** | Every router (R1 + R2) | `network_mode: host`, NET_ADMIN | Watches NATS, applies `ip rule`, heartbeats `RouterState` every 5s |
 
-A separate **web UI** container on R2 (`:18081`) talks only to the API.
+A separate **web UI** container on R2 (`:18081`) talks only to the REST API. **AI tools** (OpenClaw, Cursor, Claude, etc.) can call the same API over **MCP** at `/mcp` to manage routing policies; agents still apply kernel rules from NATS.
 
 ```
-                          ┌──────────────────────┐
-       browser  ────►     │  router-sync UI      │
-                          │  (R2, port 18081)    │
-                          └──────────┬───────────┘
-                                     │ HTTP
-                          ┌──────────▼───────────┐
-                          │  router-sync API     │
-                          │  --mode=api          │
-                          │  (R2, port 18080)    │
-                          └──────────┬───────────┘
-                                     │ NATS (auth)
-                          ┌──────────▼───────────┐
-                          │  NATS JetStream      │
-                          │  (R2, port 4222)     │
-                          │  buckets:            │
-                          │    router-sync       │
-                          │    router-sync-state │
-                          │    router-sync-logging
-                          └──┬───────────────┬───┘
-                             │               │
-              ┌──────────────▼───┐  ┌────────▼─────────┐
-              │ Agent on R1      │  │ Agent on R2      │
-              │ --mode=agent     │  │ --mode=agent     │
-              │ NET_ADMIN, host  │  │ NET_ADMIN, host  │
-              │ :18082/metrics   │  │ :18082/metrics   │
-              └──────────────────┘  └──────────────────┘
+         browser                AI tools (OpenClaw / Cursor / …)
+            │                              │
+            │ HTTP                         │ MCP (optional Bearer)
+            ▼                              ▼
+   ┌─────────────────┐          ┌──────────────────────────┐
+   │ router-sync UI  │          │                          │
+   │ (R2, :18081)    │──REST───►│  router-sync API         │
+   └─────────────────┘          │  --mode=api (R2, :18080) │
+                                │   REST /api/v1           │
+                                │   MCP  /mcp              │
+                                └────────────┬─────────────┘
+                                             │ NATS (auth)
+                                ┌────────────▼─────────────┐
+                                │  NATS JetStream          │
+                                │  (R2, port 4222)         │
+                                │  buckets:                │
+                                │    router-sync           │
+                                │    router-sync-state     │
+                                │    router-sync-logging   │
+                                └──┬───────────────────┬───┘
+                                   │                   │
+                    ┌──────────────▼───┐  ┌────────────▼────────┐
+                    │ Agent on R1      │  │ Agent on R2         │
+                    │ --mode=agent     │  │ --mode=agent        │
+                    │ NET_ADMIN, host  │  │ NET_ADMIN, host     │
+                    │ :18082/metrics   │  │ :18082/metrics      │
+                    └──────────────────┘  └─────────────────────┘
 ```
 
 ### NATS KV buckets
@@ -67,6 +68,7 @@ Provider **routing tables** (default routes per uplink) must exist on each route
 - **Live router state in the UI** — interfaces, all routing tables (main + provider), `ip rule` list, online indicator.
 - **Runtime log levels per service** — `api`, `agent.r1`, `agent.r2` via API and Settings page.
 - **Web UI** — Dashboard, Routers, Devices, Policies, Providers, Settings ([`web/README.md`](web/README.md)).
+- **MCP for AI tools** — optional `/mcp` on the API for policy list/create/update/delete (same NATS store as REST); see [`ARCHITECTURE.md`](ARCHITECTURE.md#mcp-and-ai-tools).
 - **Prometheus** — API `:18080/metrics`, agent `:18082/metrics`.
 - **Active/active writes** — generation + `writer_id` conflict resolution on provider/policy updates.
 - **Single Docker image** for API and agent (`router-sync:latest`).
