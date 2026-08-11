@@ -26,9 +26,9 @@ type LogLevelsResponse struct {
 
 // ServiceLevel pairs a service id with its level and a hint about its source.
 type ServiceLevel struct {
-	Level   string `json:"level"`
-	Source  string `json:"source,omitempty"`  // "live" or "persisted"
-	Online  bool   `json:"online,omitempty"`
+	Level  string `json:"level"`
+	Source string `json:"source,omitempty"` // "live" or "persisted"
+	Online bool   `json:"online,omitempty"`
 }
 
 // SetLogLevelRequest updates the runtime log level for a service.

@@ -50,12 +50,12 @@ const (
 
 // Client represents a NATS client with key-value store capabilities
 type Client struct {
-	conn       *nats.Conn
-	js         nats.JetStreamContext
-	kv         nats.KeyValue
-	kvState    nats.KeyValue
-	kvLogging  nats.KeyValue
-	writerID   string
+	conn      *nats.Conn
+	js        nats.JetStreamContext
+	kv        nats.KeyValue
+	kvState   nats.KeyValue
+	kvLogging nats.KeyValue
+	writerID  string
 }
 
 // sanitizeKey sanitizes a key to be compatible with NATS key-value store

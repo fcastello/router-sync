@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"router-sync/internal/mcpserver"
-	"router-sync/internal/policies"
 	"router-sync/internal/models"
+	"router-sync/internal/policies"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/mock"

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"router-sync/internal/models"
-	"router-sync/internal/policies"
 	natsclient "router-sync/internal/nats"
+	"router-sync/internal/policies"
 
 	"github.com/gin-gonic/gin"
 )
@@ -41,9 +41,9 @@ type UpdateProviderRequest struct {
 // CreatePolicyRequest represents a request to create a policy
 // The source_ip will be used as the policy ID for routing
 type CreatePolicyRequest struct {
-	Name        string `json:"name" binding:"required" example:"Home Network"`
-	SourceIP    string `json:"source_ip" binding:"required" example:"192.168.1.100"`
-	ProviderID  string `json:"provider_id" binding:"required" example:"provider-123"`
+	Name        string   `json:"name" binding:"required" example:"Home Network"`
+	SourceIP    string   `json:"source_ip" binding:"required" example:"192.168.1.100"`
+	ProviderID  string   `json:"provider_id" binding:"required" example:"provider-123"`
 	Description string   `json:"description" example:"Route home network through primary provider"`
 	Tags        []string `json:"tags" example:"iot,kids"`
 	Enabled     bool     `json:"enabled" example:"true"`
@@ -52,9 +52,9 @@ type CreatePolicyRequest struct {
 
 // UpdatePolicyRequest represents a request to update a policy
 type UpdatePolicyRequest struct {
-	Name        string `json:"name" binding:"required" example:"Home Network"`
-	SourceIP    string `json:"source_ip" binding:"required" example:"192.168.1.100"`
-	ProviderID  string `json:"provider_id" binding:"required" example:"provider-123"`
+	Name        string   `json:"name" binding:"required" example:"Home Network"`
+	SourceIP    string   `json:"source_ip" binding:"required" example:"192.168.1.100"`
+	ProviderID  string   `json:"provider_id" binding:"required" example:"provider-123"`
 	Description string   `json:"description" example:"Route home network through primary provider"`
 	Tags        []string `json:"tags" example:"iot,kids"`
 	Enabled     bool     `json:"enabled" example:"true"`

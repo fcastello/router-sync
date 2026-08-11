@@ -10,8 +10,8 @@ import (
 	"router-sync/docs"
 	"router-sync/internal/config"
 	"router-sync/internal/logging"
-	"router-sync/internal/metrics"
 	"router-sync/internal/mcpserver"
+	"router-sync/internal/metrics"
 	"router-sync/internal/nats"
 	"router-sync/internal/policies"
 
@@ -95,9 +95,9 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, version, buildT
 	policyService := policies.NewService(natsClient)
 
 	server := &Server{
-		config:        cfg,
-		natsClient:    natsClient,
-		policyService: policyService,
+		config:              cfg,
+		natsClient:          natsClient,
+		policyService:       policyService,
 		reg:                 reg,
 		httpRequestsTotal:   httpRequestsTotal,
 		httpRequestDuration: httpRequestDuration,

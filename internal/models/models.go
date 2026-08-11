@@ -87,7 +87,7 @@ type RoutingTable struct {
 
 // Route is a single routing table entry.
 type Route struct {
-	Dst       string `json:"dst"`     // "default" or CIDR
+	Dst       string `json:"dst"` // "default" or CIDR
 	Gateway   string `json:"gateway,omitempty"`
 	Interface string `json:"interface,omitempty"`
 	Protocol  string `json:"protocol,omitempty"`
@@ -97,9 +97,9 @@ type Route struct {
 
 // IPRule is a single `ip rule` entry.
 type IPRule struct {
-	Priority int    `json:"priority"`
-	From     string `json:"from"`
-	Table    int    `json:"table"`
+	Priority  int    `json:"priority"`
+	From      string `json:"from"`
+	Table     int    `json:"table"`
 	TableName string `json:"table_name,omitempty"`
 }
 
