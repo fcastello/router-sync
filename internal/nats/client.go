@@ -420,7 +420,7 @@ func (c *Client) WatchProviders(ctx context.Context, callback func(*models.Inter
 // WatchPolicies watches for changes to policies
 func (c *Client) WatchPolicies(ctx context.Context, callback func(*models.RoutingPolicy, nats.KeyValueOp)) error {
 	// "policies.>" matches every key under the "policies." prefix, including
-	// IPv4 IDs like 192.168.2.25 that contain dots. Plain "policies.*" matches
+	// IPv4 IDs like 192.168.1.50 that contain dots. Plain "policies.*" matches
 	// only single-token IDs, silently dropping every IP-keyed policy.
 	watcher, err := c.kv.Watch("policies.>")
 	if err != nil {

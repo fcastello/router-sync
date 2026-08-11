@@ -41,9 +41,17 @@ type NATSConfig struct {
 	WriterID  string   `yaml:"writer_id"`
 }
 
+// MCPConfig configures the policy-only MCP endpoint on the API server.
+type MCPConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	Path        string `yaml:"path"`
+	BearerToken string `yaml:"bearer_token"`
+}
+
 // APIConfig represents API server configuration
 type APIConfig struct {
-	Address string `yaml:"address"`
+	Address string    `yaml:"address"`
+	MCP     MCPConfig `yaml:"mcp"`
 }
 
 // SyncConfig represents synchronization configuration
@@ -68,6 +76,9 @@ type AgentConfig struct {
 //   - ROUTER_SYNC_MODE                  (api|agent)
 //   - ROUTER_SYNC_LOG_LEVEL
 //   - ROUTER_SYNC_API_ADDRESS
+//   - ROUTER_SYNC_MCP_ENABLED       (true|false)
+//   - ROUTER_SYNC_MCP_PATH          (default /mcp)
+//   - ROUTER_SYNC_MCP_TOKEN         (optional bearer token for /mcp)
 //   - ROUTER_SYNC_AGENT_HOSTNAME
 //   - ROUTER_SYNC_AGENT_METRICS_ADDRESS
 //   - ROUTER_SYNC_AGENT_STATE_INTERVAL  (Go duration: 5s, 1m...)
@@ -100,6 +111,9 @@ func applyDefaults(config *Config) {
 	}
 	if config.API.Address == "" {
 		config.API.Address = ":18080"
+	}
+	if config.API.MCP.Path == "" {
+		config.API.MCP.Path = "/mcp"
 	}
 	if config.Sync.Interval == 0 {
 		config.Sync.Interval = 30 * time.Second
@@ -137,6 +151,15 @@ func applyEnvOverrides(config *Config) {
 	}
 	if v := os.Getenv("ROUTER_SYNC_API_ADDRESS"); v != "" {
 		config.API.Address = v
+	}
+	if v := os.Getenv("ROUTER_SYNC_MCP_ENABLED"); v != "" {
+		config.API.MCP.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("ROUTER_SYNC_MCP_PATH"); v != "" {
+		config.API.MCP.Path = v
+	}
+	if v := os.Getenv("ROUTER_SYNC_MCP_TOKEN"); v != "" {
+		config.API.MCP.BearerToken = v
 	}
 	if v := os.Getenv("ROUTER_SYNC_AGENT_HOSTNAME"); v != "" {
 		config.Agent.Hostname = v

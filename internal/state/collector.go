@@ -65,7 +65,7 @@ func (c *Collector) collectRules() ([]models.IPRule, error) {
 
 // parseIPRule extracts priority, source CIDR and table from an `ip rule show` line, e.g.:
 //
-//	"100: from 192.168.2.25 lookup 99"
+//	"100: from 192.168.1.50 lookup 99"
 //	"32766: from all lookup main"
 func parseIPRule(line string) (models.IPRule, bool) {
 	parts := strings.Fields(line)

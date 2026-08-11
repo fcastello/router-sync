@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Home networks with more than one internet uplink need more than a default route: you want specific devices or subnets to use Starlink, others on fiber, and everything to keep working when you fail over between two Linux routers. Doing that by hand with `ip rule` and separate routing tables on **each** router does not scale.
+Home networks with more than one internet uplink need more than a default route: you want specific devices or subnets to use a backup uplink, others on fiber, and everything to keep working when you fail over between two Linux routers. Doing that by hand with `ip rule` and separate routing tables on **each** router does not scale.
 
 **Router Sync** is an open-source stack that centralizes provider and policy configuration in **NATS JetStream**, exposes a **REST API** and **web UI** on one host, and runs a lightweight **agent** on every router that applies policy rules locally and reports live kernel state back.
 
@@ -14,7 +14,7 @@ Two Ubuntu routers (**R1** and **R2**) share LAN duties. **R2** also runs:
 - **router-sync API** (`--mode=api`, port 18080)
 - **router-sync UI** (port 18081)
 
-Each router runs **router-sync agent** (`--mode=agent`, host network, NET_ADMIN) and three uplinks mapped to routing tables **99** (Telecom), **100** (Starlink), and **200** (Tuenti).
+Each router runs **router-sync agent** (`--mode=agent`, host network, NET_ADMIN) and three uplinks mapped to routing tables **99** (fiber), **100** (backup), and **200** (lte).
 
 ```
   Browser ──► UI :18081 ──► API :18080 ──► NATS :4222
@@ -45,27 +45,27 @@ One Docker image, one binary: `router-sync --mode=api` or `--mode=agent`.
 Each provider has a **routing table ID** and a **default route** on the correct interface. I define those with **netplan** on each router (separate from Router Sync), for example:
 
 ```yaml
-enp1s0:
+eth0:
   dhcp4: true
   routes:
     - to: default
-      via: 192.168.4.1
+      via: 192.168.10.1
       metric: 100
       table: 99
       on-link: true
 ```
 
-Starlink and Tuenti use tables 100 and 200 on `enp2s0` and `enp3s0`. The agent does **not** install these table routes today; netplan owns them.
+Backup and LTE uplinks use tables 100 and 200 on `eth1` and `eth2`. The agent does **not** install these table routes today; netplan owns them.
 
 ### Policy rules (agent)
 
-When I enable a policy for `192.168.2.25` → Telecom, each agent adds:
+When I enable a policy for `192.168.1.50` → fiber, each agent adds:
 
 ```text
-2000: from 192.168.2.25 lookup 99
+2000: from 192.168.1.50 lookup 99
 ```
 
-Disabled policies remove their rules. Changes propagate in a few seconds via NATS watchers (`policies.>` so IDs like `192.168.2.0/25` work).
+Disabled policies remove their rules. Changes propagate in a few seconds via NATS watchers (`policies.>` so IDs like `192.168.1.0/24` work).
 
 ### The suppress-default rule
 
@@ -83,10 +83,10 @@ The same logical provider can use different interface names on each router. In t
 
 ```json
 {
-  "name": "Telecom",
-  "interfaces": { "r1": "enp1s0", "r2": "enp1s0" },
+  "name": "fiber",
+  "interfaces": { "r1": "eth0", "r2": "eth0" },
   "table_id": 99,
-  "gateway": "192.168.4.1"
+  "gateway": "192.168.10.1"
 }
 ```
 
@@ -99,37 +99,37 @@ The UI is a separate container so you can redeploy the frontend without touching
 | Page | What you see |
 |------|----------------|
 | **Dashboard** | API health, router cards, traffic allocation (enabled policies only), recent policies |
-| **Routers** | Live interfaces, **all** routing tables (main + Telecom/Starlink/Tuenti), IP rules |
+| **Routers** | Live interfaces, **all** routing tables (main + fiber/backup/lte), IP rules |
 | **Policies** | Enable/disable, assign provider |
 | **Providers** | Uplinks with per-router interfaces |
 | **Settings** | API URL, log level per service (`api`, `agent.r1`, `agent.r2`) |
 
-Open the UI at **http://192.168.2.252:18081**. The API at **:18080** returns JSON only — a browser visit to `:18080/` shows `404`, which is expected.
+Open the UI at **http://192.168.1.10:18081**. The API at **:18080** returns JSON only — a browser visit to `:18080/` shows `404`, which is expected.
 
 ## Example workflow
 
 **1. Define providers** (once):
 
 ```bash
-curl -X POST http://192.168.2.252:18080/api/v1/providers \
+curl -X POST http://192.168.1.10:18080/api/v1/providers \
   -H 'Content-Type: application/json' \
   -d '{
-    "name": "Starlink",
-    "interfaces": {"r1": "enp2s0", "r2": "enp2s0"},
+    "name": "backup",
+    "interfaces": {"r1": "eth1", "r2": "eth1"},
     "table_id": 100,
-    "gateway": "192.168.3.1"
+    "gateway": "192.168.20.1"
   }'
 ```
 
-**2. Route one laptop through Starlink:**
+**2. Route one laptop through backup:**
 
 ```bash
-curl -X PUT http://192.168.2.252:18080/api/v1/policies/192.168.2.24 \
+curl -X PUT http://192.168.1.10:18080/api/v1/policies/192.168.1.50 \
   -H 'Content-Type: application/json' \
   -d '{
-    "name": "Pancho2",
-    "source_ip": "192.168.2.24",
-    "provider_id": "Starlink",
+    "name": "laptop",
+    "source_ip": "192.168.1.50",
+    "provider_id": "backup",
     "enabled": true
   }'
 ```
@@ -162,8 +162,8 @@ See [README.md — Production deployment](README.md#production-deployment) for n
 
 ## Monitoring
 
-- API: `curl http://192.168.2.252:18080/metrics`
-- Agents: `curl http://r1.fcast.ar:18082/metrics`
+- API: `curl http://192.168.1.10:18080/metrics`
+- Agents: `curl http://r1.example.com:18082/metrics`
 - Health: `/health` on both ports
 
 Useful agent metrics: `agent_sync_total`, `agent_rules_total`, `agent_state_publish_total`.

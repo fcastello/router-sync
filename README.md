@@ -53,7 +53,7 @@ A separate **web UI** container on R2 (`:18081`) talks only to the API.
 ### What the agent does on each router
 
 1. **On start** — installs priority-10 rule: `from all lookup main suppress_prefixlength 0` (LAN traffic stays in main; only default-route traffic falls through to policy rules). Skips if already present.
-2. **Watches** providers and policies in NATS (`policies.>` / `providers.>` so dotted IDs like `192.168.2.25` match).
+2. **Watches** providers and policies in NATS (`policies.>` / `providers.>` so dotted IDs like `192.168.1.50` match).
 3. **Applies** enabled policies as `ip rule` entries at priority 2000–2032 (`from <src> lookup <table_id>`).
 4. **Publishes** full router state every 5s (all routing tables via netlink, not just `main`).
 5. **On stop** — removes managed policy rules and the suppress-default rule.
@@ -62,7 +62,7 @@ Provider **routing tables** (default routes per uplink) must exist on each route
 
 ## Features
 
-- **Per-router interface mapping** — `interfaces: {r1: enp1s0, r2: enp2s0}` on each provider; legacy `interface` auto-migrated on API startup.
+- **Per-router interface mapping** — `interfaces: {r1: eth0, r2: eth1}` on each provider; legacy `interface` auto-migrated on API startup.
 - **Policy-based routing** — source IP or CIDR → provider routing table; agents on all routers apply rules locally.
 - **Live router state in the UI** — interfaces, all routing tables (main + provider), `ip rule` list, online indicator.
 - **Runtime log levels per service** — `api`, `agent.r1`, `agent.r2` via API and Settings page.
@@ -116,18 +116,18 @@ On each router, define default routes in provider-specific tables (IDs must matc
 network:
   version: 2
   ethernets:
-    wan-telecom:
+    wan-fiber:
       dhcp4: true
       routes:
         - to: default
-          via: 192.168.4.1
+          via: 192.168.10.1
           table: 99
           on-link: true
-    wan-starlink:
+    wan-backup:
       dhcp4: true
       routes:
         - to: default
-          via: 192.168.3.1
+          via: 192.168.20.1
           table: 100
           on-link: true
 ```
@@ -172,6 +172,7 @@ After deployment:
 - **UI**: `http://<api-host>:18081`
 - **API**: `http://<api-host>:18080` (JSON only — no HTML at `/`)
 - **Swagger**: `http://<api-host>:18080/swagger/index.html`
+- **MCP (policies)**: `http://<api-host>:18080/mcp` — for OpenClaw and other MCP agents; see [`docs/MCP.md`](docs/MCP.md)
 
 Release binaries and install scripts are on [GitHub Releases](https://github.com/fcastello/router-sync/releases). For systemd-based installs without Docker, see [`scripts/README.md`](scripts/README.md).
 
@@ -185,7 +186,7 @@ log_level: warn
 
 nats:
   urls:
-    - "nats://192.168.2.252:4222"
+    - "nats://192.168.1.10:4222"
   username: "router_sync"
   password: "your-password"
   cluster_id: "router-sync-cluster"
@@ -194,6 +195,10 @@ nats:
 
 api:
   address: ":18080"
+  mcp:
+    enabled: true
+    path: "/mcp"
+    # bearer_token: "optional-shared-secret"
 
 sync:
   interval: 30s
@@ -222,18 +227,18 @@ Base URL: `http://<host>:18080`
 | Stats | `GET /api/v1/stats` |
 | Sync | `POST /api/v1/sync` (no-op; agents sync continuously) |
 
-**CIDR policy IDs in URLs** — use underscore instead of slash: `192.168.2.0_25` for `192.168.2.0/25`.
+**CIDR policy IDs in URLs** — use underscore instead of slash: `192.168.1.0_24` for `192.168.1.0/24`.
 
 ### Create provider (per-router interfaces)
 
 ```bash
-curl -X POST http://192.168.2.252:18080/api/v1/providers \
+curl -X POST http://192.168.1.10:18080/api/v1/providers \
   -H 'Content-Type: application/json' \
   -d '{
-    "name": "Telecom",
-    "interfaces": {"r1": "enp1s0", "r2": "enp1s0"},
+    "name": "fiber",
+    "interfaces": {"r1": "eth0", "r2": "eth0"},
     "table_id": 99,
-    "gateway": "192.168.4.1",
+    "gateway": "192.168.10.1",
     "description": "Primary uplink"
   }'
 ```
@@ -241,12 +246,12 @@ curl -X POST http://192.168.2.252:18080/api/v1/providers \
 ### Enable a policy
 
 ```bash
-curl -X PUT http://192.168.2.252:18080/api/v1/policies/192.168.2.25 \
+curl -X PUT http://192.168.1.10:18080/api/v1/policies/192.168.1.50 \
   -H 'Content-Type: application/json' \
   -d '{
-    "name": "Pancho",
-    "source_ip": "192.168.2.25",
-    "provider_id": "Telecom",
+    "name": "laptop",
+    "source_ip": "192.168.1.50",
+    "provider_id": "fiber",
     "enabled": true
   }'
 ```
@@ -259,11 +264,11 @@ Agents pick up changes within a few seconds via NATS watchers.
 
 ```json
 {
-  "id": "Telecom",
-  "name": "Telecom",
-  "interfaces": { "r1": "enp1s0", "r2": "enp1s0" },
+  "id": "fiber",
+  "name": "fiber",
+  "interfaces": { "r1": "eth0", "r2": "eth0" },
   "table_id": 99,
-  "gateway": "192.168.4.1",
+  "gateway": "192.168.10.1",
   "description": "Primary internet connection",
   "generation": 2,
   "writer_id": "api"
@@ -272,14 +277,14 @@ Agents pick up changes within a few seconds via NATS watchers.
 
 ### RoutingPolicy
 
-Policy `id` is the source IP or CIDR (e.g. `192.168.2.25`, `192.168.2.0/25`).
+Policy `id` is the source IP or CIDR (e.g. `192.168.1.50`, `192.168.1.0/24`).
 
 ```json
 {
-  "id": "192.168.2.25",
-  "name": "Pancho",
-  "provider_id": "Telecom",
-  "description": "Kids tablet",
+  "id": "192.168.1.50",
+  "name": "laptop",
+  "provider_id": "fiber",
+  "description": "tablet",
   "tags": ["kids", "iot"],
   "enabled": true,
   "favorite": true,
@@ -298,9 +303,9 @@ Policy `id` is the source IP or CIDR (e.g. `192.168.2.25`, `192.168.2.0/25`).
   "agent_version": "dev",
   "log_level": "warning",
   "last_seen": "2026-05-28T18:45:00Z",
-  "interfaces": [{ "name": "enp1s0", "up": true, "addresses": ["192.168.4.6/24"] }],
-  "tables": [{ "id": 99, "name": "Telecom", "routes": [{ "dst": "default", "gateway": "192.168.4.1" }] }],
-  "rules": [{ "priority": 10, "from": "all", "table": 254 }, { "priority": 2000, "from": "192.168.2.25", "table": 99 }]
+  "interfaces": [{ "name": "eth0", "up": true, "addresses": ["192.168.10.2/24"] }],
+  "tables": [{ "id": 99, "name": "fiber", "routes": [{ "dst": "default", "gateway": "192.168.10.1" }] }],
+  "rules": [{ "priority": 10, "from": "all", "table": 254 }, { "priority": 2000, "from": "192.168.1.50", "table": 99 }]
 }
 ```
 

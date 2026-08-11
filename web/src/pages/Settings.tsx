@@ -116,12 +116,12 @@ export function SettingsPage() {
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="http://192.168.2.252:18080"
+              placeholder="http://192.168.1.10:18080"
             />
             <p className="mt-1 text-xs text-muted-foreground">
               {import.meta.env.DEV ? (
                 <>
-                  In dev, leave empty and use the Vite proxy to R2 (see{" "}
+                  In dev, leave empty and use the Vite proxy to the API (see{" "}
                   <code className="rounded bg-muted px-1">
                     .env.development.local
                   </code>

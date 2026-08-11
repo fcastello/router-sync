@@ -445,7 +445,7 @@ func (m *Manager) checkRoutingRuleExists(srcNet *net.IPNet) (bool, int, int) {
 			continue
 		}
 
-		// Parse line format: "100: from 192.168.2.25 lookup 99"
+		// Parse line format: "100: from 192.168.1.50 lookup 99"
 		// The rule output shows IP without CIDR suffix, so we need to match just the IP part
 		srcIP := srcNet.IP.String()
 		if strings.Contains(line, fmt.Sprintf("from %s", srcIP)) {
@@ -664,7 +664,7 @@ func (m *Manager) cleanupStaleRules(activePolicies []*models.RoutingPolicy) erro
 			continue
 		}
 
-		// Parse line format: "100: from 192.168.2.25 lookup 99"
+		// Parse line format: "100: from 192.168.1.50 lookup 99"
 		if strings.Contains(line, "from") && strings.Contains(line, "lookup") {
 			// Extract source IP from the rule
 			srcIP := ""
@@ -683,7 +683,7 @@ func (m *Manager) cleanupStaleRules(activePolicies []*models.RoutingPolicy) erro
 					found = true
 				} else {
 					// For CIDR rules, also check the IP part without CIDR
-					// e.g., if rule shows "192.168.2.0/25", also check "192.168.2.0"
+					// e.g., if rule shows "192.168.1.0/24", also check "192.168.1.0"
 					if strings.Contains(srcIP, "/") {
 						ipPart := strings.Split(srcIP, "/")[0]
 						if activeSources[ipPart] {

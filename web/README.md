@@ -10,10 +10,10 @@ npm install
 npm run dev
 ```
 
-By default, dev proxies `/api` and `/health` to R2 at `http://192.168.2.252:18080`. Override in `.env.development.local` or:
+By default, dev proxies `/api` and `/health` to the API at `http://127.0.0.1:18080`. Override in `.env.development.local` or:
 
 ```bash
-VITE_API_PROXY=http://192.168.2.252:18080 npm run dev
+VITE_API_PROXY=http://192.168.1.10:18080 npm run dev
 ```
 
 You can also set the API base URL in **Settings** (stored in `localStorage`).
@@ -30,7 +30,7 @@ npm run preview
 ```bash
 docker build -t router-sync-ui:latest ./web
 docker run --rm -p 18081:80 \
-  -e ROUTER_SYNC_API_URL=http://192.168.2.252:18080 \
+  -e ROUTER_SYNC_API_URL=http://192.168.1.10:18080 \
   router-sync-ui:latest
 ```
 
@@ -64,4 +64,4 @@ Polling: health ~5s, stats/routers ~10s.
 
 - Open **http://&lt;router&gt;:18081** for the UI. Port **18080** is the API only (no HTML at `/`).
 - Traffic allocation counts only policies with `enabled: true`.
-- Router table names (e.g. `Telecom (#99)`) come from provider `table_id` when the agent reports routes in that table.
+- Router table names (e.g. `fiber (#99)`) come from provider `table_id` when the agent reports routes in that table.

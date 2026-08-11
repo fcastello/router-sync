@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-11
+
+[1.2.0]: https://github.com/fcastello/router-sync/compare/v1.1.0...v1.2.0
+
+### Added
+
+- **MCP policy server** — optional streamable HTTP endpoint on the API (`/mcp` by default) for listing/creating/updating/deleting routing policies; optional bearer token via `api.mcp.bearer_token` or `ROUTER_SYNC_MCP_TOKEN`.
+- **Shared policies service** — `internal/policies` used by REST handlers and MCP tools.
+
+### Changed
+
+- Go toolchain bumped to **1.24** (module + Docker builder image).
+- Documentation and API examples anonymized (generic provider/interface/IP samples; keep `r1`/`r2`).
+
 ## [1.1.0] - 2026-05-29
 
 [1.1.0]: https://github.com/fcastello/router-sync/compare/v1.0.0...v1.1.0
@@ -38,7 +52,7 @@ First stable release of the split **API + agent** architecture with a standalone
 
 - **Single binary, two modes** — `--mode=api` (HTTP + NATS only) and `--mode=agent` (NET_ADMIN, host network, kernel routing).
 - **NATS JetStream KV** — three buckets: `router-sync` (providers/policies), `router-sync-state` (60s TTL heartbeats), `router-sync-logging` (per-service log levels).
-- **Per-router provider interfaces** — `interfaces: {r1: enp1s0, r2: enp2s0}` with automatic migration from legacy `interface` on API startup.
+- **Per-router provider interfaces** — `interfaces: {r1: eth0, r2: eth1}` with automatic migration from legacy `interface` on API startup.
 - **Router state API** — `GET /api/v1/routers`, per-host interfaces, routes, and `ip rule` snapshots.
 - **Per-service logging** — `GET/PUT /api/v1/logging/level/{service_id}` for `api`, `agent.r1`, `agent.r2`, etc.
 - **Agent behavior** — watches providers/policies (`providers.>` / `policies.>`), applies `ip rule` at priority 2000–2032, installs priority-10 `suppress_prefixlength` rule on start.

@@ -10,7 +10,7 @@ import (
 // InternetProvider represents an internet service provider.
 //
 // Interfaces maps a router hostname to the interface name used on that router
-// (e.g. {"r1":"enp1s0","r2":"enp2s0"}). All routers use the same TableID and Gateway.
+// (e.g. {"r1":"eth0","r2":"eth1"}). All routers use the same TableID and Gateway.
 // Interface is deprecated and kept only for backward compatibility with existing
 // records — it is auto-migrated into Interfaces on the next write.
 type InternetProvider struct {

@@ -11,7 +11,9 @@ import (
 	"router-sync/internal/config"
 	"router-sync/internal/logging"
 	"router-sync/internal/metrics"
+	"router-sync/internal/mcpserver"
 	"router-sync/internal/nats"
+	"router-sync/internal/policies"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,9 +25,10 @@ import (
 // Server represents the API server. It owns no kernel state; it only mediates
 // between the UI and NATS (providers, policies, router state, log levels).
 type Server struct {
-	config     config.APIConfig
-	natsClient nats.NATSClient
-	server     *http.Server
+	config        config.APIConfig
+	natsClient    nats.NATSClient
+	policyService *policies.Service
+	server        *http.Server
 
 	reg                 *prometheus.Registry
 	httpRequestsTotal   *prometheus.CounterVec
@@ -89,9 +92,12 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, version, buildT
 
 	reg.MustRegister(httpRequestsTotal, httpRequestDuration, providersTotal, policiesTotal, routersKnown, stateAgeSeconds, logLevelSetTotal)
 
+	policyService := policies.NewService(natsClient)
+
 	server := &Server{
-		config:              cfg,
-		natsClient:          natsClient,
+		config:        cfg,
+		natsClient:    natsClient,
+		policyService: policyService,
 		reg:                 reg,
 		httpRequestsTotal:   httpRequestsTotal,
 		httpRequestDuration: httpRequestDuration,
@@ -163,6 +169,21 @@ func NewServer(cfg config.APIConfig, natsClient nats.NATSClient, version, buildT
 	router.GET("/metrics", gin.WrapH(metrics.HandlerFor(reg)))
 	router.GET("/health", server.healthCheck)
 
+	if cfg.MCP.Enabled {
+		mcpPath := cfg.MCP.Path
+		if mcpPath == "" {
+			mcpPath = "/mcp"
+		}
+		mcpHandler := mcpserver.NewHTTPHandler(policyService, mcpserver.Options{
+			Version:   version,
+			BuildTime: buildTime,
+			GitCommit: gitCommit,
+		})
+		secured := mcpserver.BearerAuthMiddleware(cfg.MCP.BearerToken)(mcpHandler)
+		router.Any(mcpPath, gin.WrapH(secured))
+		logrus.Infof("MCP policy server enabled at %s", mcpPath)
+	}
+
 	server.server = &http.Server{
 		Addr:    cfg.Address,
 		Handler: router,
@@ -187,7 +208,7 @@ func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return

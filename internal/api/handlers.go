@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"router-sync/internal/models"
+	"router-sync/internal/policies"
 	natsclient "router-sync/internal/nats"
 
 	"github.com/gin-gonic/gin"
@@ -18,7 +20,7 @@ import (
 // Either Interface (legacy) or Interfaces (map of hostname -> interface name)
 // can be provided. Interfaces takes precedence and is the preferred form.
 type CreateProviderRequest struct {
-	Name        string            `json:"name" binding:"required" example:"Telecom"`
+	Name        string            `json:"name" binding:"required" example:"fiber"`
 	Interface   string            `json:"interface" example:"eth0"`
 	Interfaces  map[string]string `json:"interfaces" example:"{\"r1\":\"eth1\",\"r2\":\"eth2\"}"`
 	TableID     int               `json:"table_id" binding:"required,min=1" example:"100"`
@@ -28,7 +30,7 @@ type CreateProviderRequest struct {
 
 // UpdateProviderRequest mirrors CreateProviderRequest.
 type UpdateProviderRequest struct {
-	Name        string            `json:"name" binding:"required" example:"Telecom"`
+	Name        string            `json:"name" binding:"required" example:"fiber"`
 	Interface   string            `json:"interface" example:"eth0"`
 	Interfaces  map[string]string `json:"interfaces"`
 	TableID     int               `json:"table_id" binding:"required,min=1" example:"100"`
@@ -299,7 +301,7 @@ func (s *Server) deleteProvider(c *gin.Context) {
 // @Success 200 {array} models.RoutingPolicy
 // @Router /api/v1/policies [get]
 func (s *Server) listPolicies(c *gin.Context) {
-	policies, err := s.natsClient.ListPolicies()
+	policies, err := s.policyService.List()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "Failed to list policies",
@@ -332,36 +334,23 @@ func (s *Server) createPolicy(c *gin.Context) {
 		return
 	}
 
-	now := time.Now()
-	policy := &models.RoutingPolicy{
-		ID:          req.SourceIP,
+	policy, err := s.policyService.Create(policies.CreateRequest{
 		Name:        req.Name,
+		SourceIP:    req.SourceIP,
 		ProviderID:  req.ProviderID,
 		Description: req.Description,
-		Tags:        models.NormalizeTags(req.Tags),
+		Tags:        req.Tags,
 		Enabled:     req.Enabled,
 		Favorite:    req.Favorite,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-
-	if err := policy.Validate(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Validation failed",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	if _, err := s.natsClient.GetProvider(req.ProviderID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Provider not found",
-			"details": "The specified provider ID does not exist",
-		})
-		return
-	}
-
-	if err := s.natsClient.StorePolicy(policy); err != nil {
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "provider not found") || strings.Contains(err.Error(), "validation:") {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Failed to create policy",
+				"details": err.Error(),
+			})
+			return
+		}
 		writeStoreError(c, "Failed to create policy", err)
 		return
 	}
@@ -371,11 +360,11 @@ func (s *Server) createPolicy(c *gin.Context) {
 
 // getPolicy gets a specific routing policy
 // @Summary Get policy
-// @Description Get a specific routing policy by ID. For CIDR-based IDs, use underscore instead of slash (e.g., 192.168.2.0_25 for 192.168.2.0/25)
+// @Description Get a specific routing policy by ID. For CIDR-based IDs, use underscore instead of slash (e.g., 192.168.1.0_24 for 192.168.1.0/24)
 // @Tags policies
 // @Accept json
 // @Produce json
-// @Param id path string true "Policy ID (use underscore for CIDR, e.g., 192.168.2.0_25)"
+// @Param id path string true "Policy ID (use underscore for CIDR, e.g., 192.168.1.0_24)"
 // @Success 200 {object} models.RoutingPolicy
 // @Failure 404 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
@@ -383,7 +372,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 func (s *Server) getPolicy(c *gin.Context) {
 	id := c.Param("id")
 
-	policy, err := s.natsClient.GetPolicy(id)
+	policy, err := s.policyService.Get(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "Policy not found",
@@ -397,11 +386,11 @@ func (s *Server) getPolicy(c *gin.Context) {
 
 // updatePolicy updates an existing routing policy
 // @Summary Update policy
-// @Description Update an existing routing policy. For CIDR-based IDs, use underscore instead of slash (e.g., 192.168.2.0_25 for 192.168.2.0/25)
+// @Description Update an existing routing policy. For CIDR-based IDs, use underscore instead of slash (e.g., 192.168.1.0_24 for 192.168.1.0/24)
 // @Tags policies
 // @Accept json
 // @Produce json
-// @Param id path string true "Policy ID (use underscore for CIDR, e.g., 192.168.2.0_25)"
+// @Param id path string true "Policy ID (use underscore for CIDR, e.g., 192.168.1.0_24)"
 // @Param policy body UpdatePolicyRequest true "Policy information"
 // @Success 200 {object} models.RoutingPolicy
 // @Failure 400 {object} map[string]interface{}
@@ -420,55 +409,44 @@ func (s *Server) updatePolicy(c *gin.Context) {
 		return
 	}
 
-	existing, err := s.natsClient.GetPolicy(id)
+	policy, err := s.policyService.Update(id, policies.UpdateRequest{
+		Name:        req.Name,
+		SourceIP:    req.SourceIP,
+		ProviderID:  req.ProviderID,
+		Description: req.Description,
+		Tags:        req.Tags,
+		Enabled:     req.Enabled,
+		Favorite:    req.Favorite,
+	})
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "Policy not found",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	existing.Name = req.Name
-	existing.ID = req.SourceIP
-	existing.ProviderID = req.ProviderID
-	existing.Description = req.Description
-	existing.Tags = models.NormalizeTags(req.Tags)
-	existing.Enabled = req.Enabled
-	existing.Favorite = req.Favorite
-	existing.UpdatedAt = time.Now()
-
-	if err := existing.Validate(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Validation failed",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	if _, err := s.natsClient.GetProvider(req.ProviderID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Provider not found",
-			"details": "The specified provider ID does not exist",
-		})
-		return
-	}
-
-	if err := s.natsClient.StorePolicy(existing); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":   "Policy not found",
+				"details": err.Error(),
+			})
+			return
+		}
+		if strings.Contains(err.Error(), "provider not found") || strings.Contains(err.Error(), "validation:") {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Failed to update policy",
+				"details": err.Error(),
+			})
+			return
+		}
 		writeStoreError(c, "Failed to update policy", err)
 		return
 	}
 
-	c.JSON(http.StatusOK, existing)
+	c.JSON(http.StatusOK, policy)
 }
 
 // deletePolicy deletes a routing policy
 // @Summary Delete policy
-// @Description Delete a routing policy. For CIDR-based IDs, use underscore instead of slash (e.g., 192.168.2.0_25 for 192.168.2.0/25)
+// @Description Delete a routing policy. For CIDR-based IDs, use underscore instead of slash (e.g., 192.168.1.0_24 for 192.168.1.0/24)
 // @Tags policies
 // @Accept json
 // @Produce json
-// @Param id path string true "Policy ID (use underscore for CIDR, e.g., 192.168.2.0_25)"
+// @Param id path string true "Policy ID (use underscore for CIDR, e.g., 192.168.1.0_24)"
 // @Success 204 "No Content"
 // @Failure 404 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
@@ -476,7 +454,7 @@ func (s *Server) updatePolicy(c *gin.Context) {
 func (s *Server) deletePolicy(c *gin.Context) {
 	id := c.Param("id")
 
-	if err := s.natsClient.DeletePolicy(id); err != nil {
+	if err := s.policyService.Delete(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "Failed to delete policy",
 			"details": err.Error(),

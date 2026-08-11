@@ -14,6 +14,10 @@ nats:
 
 api:
   address: ":18080"
+  mcp:
+    enabled: true
+    path: "/mcp"
+    # bearer_token: ""  # optional; set ROUTER_SYNC_MCP_TOKEN or use Authorization: Bearer
 
 sync:
   interval: 30s

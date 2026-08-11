@@ -10,7 +10,7 @@ Policy routing uses Linux **routing tables** (provisioned by netplan per uplink)
 
 ```mermaid
 flowchart TB
-  subgraph R2["R2 (192.168.2.252)"]
+  subgraph R2["R2 (192.168.1.10)"]
     UI["router-sync-ui :18081"]
     API["router-sync-api --mode=api :18080"]
     NATS["NATS JetStream :4222"]
@@ -98,10 +98,10 @@ graph TB
 ```mermaid
 graph LR
   subgraph bucket_core["router-sync"]
-    P1["provider.Telecom"]
-    P2["provider.Starlink"]
-    POL1["policies.192.168.2.25"]
-    POL2["policies.192.168.2.0_25"]
+    P1["provider.fiber"]
+    P2["provider.backup"]
+    POL1["policies.192.168.1.50"]
+    POL2["policies.192.168.1.0_24"]
   end
 
   subgraph bucket_state["router-sync-state (TTL 60s)"]
@@ -169,12 +169,12 @@ sequenceDiagram
     participant A2 as Agent R2
     participant K as Linux kernel
 
-    UI->>API: PUT /api/v1/policies/192.168.2.25 enabled=true
+    UI->>API: PUT /api/v1/policies/192.168.1.50 enabled=true
     API->>NATS: CAS update policy
     NATS-->>A1: policies.> watcher
     NATS-->>A2: policies.> watcher
-    A1->>K: ip rule add from 192.168.2.25 lookup 99 prio 2000
-    A2->>K: ip rule add from 192.168.2.25 lookup 99 prio 2000
+    A1->>K: ip rule add from 192.168.1.50 lookup 99 prio 2000
+    A2->>K: ip rule add from 192.168.1.50 lookup 99 prio 2000
     A1->>NATS: router.r1 state heartbeat
     A2->>NATS: router.r2 state heartbeat
     UI->>API: GET /api/v1/routers
@@ -190,9 +190,9 @@ Each uplink needs a dedicated routing table with a default route on the correct 
 
 | Provider | Table ID | Interface (example) | Default route |
 |----------|----------|---------------------|---------------|
-| Telecom | 99 | enp1s0 | via 192.168.4.1 |
-| Starlink | 100 | enp2s0 | via 192.168.3.1 |
-| Tuenti | 200 | enp3s0 | via 192.168.150.1 |
+| fiber | 99 | eth0 | via 192.168.10.1 |
+| backup | 100 | eth1 | via 192.168.20.1 |
+| lte | 200 | eth2 | via 192.168.30.1 |
 
 Apply with `netplan apply` (or your distro's equivalent) on **each** router before expecting policies to work. Provider `table_id` in NATS must match these IDs.
 
