@@ -203,6 +203,19 @@ Apply with `netplan apply` (or your distro's equivalent) on **each** router befo
 | 10 | `from all lookup main suppress_prefixlength 0` | Agent on start/stop |
 | 2000–2032 | `from <src> lookup <table_id>` | Agent per enabled policy |
 
+Policy rule priority is derived from IPv4 prefix length so more specific sources are evaluated first (Linux: lower number wins):
+
+| Prefix | Priority |
+|--------|----------|
+| /32 (host) | 2000 |
+| /31 … /25 | 2001 … 2007 |
+| /24 | 2008 |
+| … | … |
+| /8 | 2024 |
+| /0 (widest) | 2032 |
+
+Formula: `priority = 2000 + (32 − prefixLen)`. Example: a host `/32` and an overlapping `/24` both enabled → the host rule at `2000` wins. On each sync the agent rewrites a rule if its priority or table does not match.
+
 The **suppress-prefixlength** rule ensures traffic to local subnets uses the main table while only traffic matching the default route falls through to per-source policy rules.
 
 ### State collection
@@ -233,7 +246,7 @@ CORS is enabled for the standalone UI origin.
 3. Goroutines: `periodicSync`, `watchProviders`, `watchPolicies`, `publishStateLoop`, `watchLogLevel`
 4. On shutdown (via `main`): `CleanupAllRules()` then `RemoveSuppressDefaultRule()`
 
-`internal/router/manager.go` applies policies with priorities 2000–2032, skips duplicate rules, clears conntrack when rules change, and validates one rule per source IP in the managed range.
+`internal/router/manager.go` applies policies with prefix-length priorities (2000–2032; `/32` → 2000 … `/8` → 2024), reconciles stale priority/table on sync, deletes by `from <cidr>` (safe when multiple policies share a prefix length), clears conntrack when rules change, and validates one rule per source in the managed range.
 
 **Note:** `SetupProvider` currently logs success but does not install routes into provider tables; table defaults come from netplan.
 

@@ -54,7 +54,7 @@ A separate **web UI** container on R2 (`:18081`) talks only to the API.
 
 1. **On start** — installs priority-10 rule: `from all lookup main suppress_prefixlength 0` (LAN traffic stays in main; only default-route traffic falls through to policy rules). Skips if already present.
 2. **Watches** providers and policies in NATS (`policies.>` / `providers.>` so dotted IDs like `192.168.1.50` match).
-3. **Applies** enabled policies as `ip rule` entries at priority 2000–2032 (`from <src> lookup <table_id>`).
+3. **Applies** enabled policies as `ip rule` entries at priorities **2000–2032** using prefix length (`from <src> lookup <table_id>`). More specific sources win: host `/32` → `2000`, `/25` → `2007`, `/24` → `2008`, … `/8` → `2024`. Overlapping policies are resolved by longest prefix (lowest priority number). Agents rewrite a rule if its priority or table is stale.
 4. **Publishes** full router state every 5s (all routing tables via netlink, not just `main`).
 5. **On stop** — removes managed policy rules and the suppress-default rule.
 

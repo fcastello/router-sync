@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-08-11
+
+[1.2.1]: https://github.com/fcastello/router-sync/compare/v1.2.0...v1.2.1
+
+### Fixed
+
+- **Prefix-length ip rule priorities** — agents reconcile stale priorities on sync (`priority = 2000 + (32 − prefixLen)` so `/32` wins over `/25` over `/24`); match and delete rules by `from <cidr>` so equal-length policies do not clobber each other.
+
+### Changed
+
+- Documented the `/8`–`/32` → `2000`–`2024` priority map in README and ARCHITECTURE.
+
 ## [1.2.0] - 2026-08-11
 
 [1.2.0]: https://github.com/fcastello/router-sync/compare/v1.1.0...v1.2.0

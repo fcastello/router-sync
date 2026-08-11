@@ -124,24 +124,9 @@ func (m *Manager) SetupPolicy(policy *models.RoutingPolicy, provider *models.Int
 	if !policy.Enabled {
 		logrus.Debugf("Policy %s is disabled, removing existing rules", policy.Name)
 
-		// Parse policy ID as source IP/CIDR
-		var srcNet *net.IPNet
-
-		// Try to parse as CIDR first
-		_, ipnet, err := net.ParseCIDR(policy.ID)
+		srcNet, err := parsePolicySource(policy.ID)
 		if err != nil {
-			// Try as single IP
-			srcIP := net.ParseIP(policy.ID)
-			if srcIP == nil {
-				return fmt.Errorf("invalid policy ID as source IP/CIDR: %s", policy.ID)
-			}
-			// Create a /32 network for single IP
-			srcNet = &net.IPNet{
-				IP:   srcIP,
-				Mask: net.CIDRMask(32, 32),
-			}
-		} else {
-			srcNet = ipnet
+			return err
 		}
 
 		// Remove all rules for this source IP and clear conntrack
@@ -160,49 +145,34 @@ func (m *Manager) SetupPolicy(policy *models.RoutingPolicy, provider *models.Int
 	logrus.Debugf("Setting up policy %s (ID: %s) to use provider %s (TableID: %d)",
 		policy.Name, policy.ID, provider.Name, provider.TableID)
 
-	// Parse policy ID as source IP/CIDR
-	var srcNet *net.IPNet
-
-	// Try to parse as CIDR first
-	_, ipnet, err := net.ParseCIDR(policy.ID)
+	srcNet, err := parsePolicySource(policy.ID)
 	if err != nil {
-		// Try as single IP
-		srcIP := net.ParseIP(policy.ID)
-		if srcIP == nil {
-			return fmt.Errorf("invalid policy ID as source IP/CIDR: %s", policy.ID)
-		}
-		// Create a /32 network for single IP
-		srcNet = &net.IPNet{
-			IP:   srcIP,
-			Mask: net.CIDRMask(32, 32),
-		}
-	} else {
-		srcNet = ipnet
+		return err
 	}
 
-	logrus.Debugf("Parsed source network: %s", srcNet.String())
+	wantPriority := calculatePriority(srcNet)
+	logrus.Debugf("Parsed source network: %s (want priority %d)", srcNet.String(), wantPriority)
 
 	// Check if a rule already exists for this source network
 	exists, existingPriority, existingTable := m.checkRoutingRuleExists(srcNet)
 
-	if exists {
-		// If the rule exists and points to the correct table, no changes needed
-		if existingTable == provider.TableID {
-			logrus.Debugf("SKIPPING: Routing rule already exists and is correct for policy %s: priority=%d, table=%d, src=%s",
-				policy.Name, existingPriority, existingTable, srcNet.String())
-			return nil
-		}
+	if exists && existingPriority == wantPriority && existingTable == provider.TableID {
+		logrus.Debugf("SKIPPING: Routing rule already exists and is correct for policy %s: priority=%d, table=%d, src=%s",
+			policy.Name, existingPriority, existingTable, srcNet.String())
+		return nil
+	}
 
-		// If the rule exists but points to a different table, remove all rules for this source
-		logrus.Debugf("Policy changed: removing all rules for source %s and adding new rule (table: %d)",
-			srcNet.String(), provider.TableID)
+	if exists {
+		logrus.Infof("Reconciling rule for %s: have priority=%d table=%d, want priority=%d table=%d",
+			srcNet.String(), existingPriority, existingTable, wantPriority, provider.TableID)
 		if err := m.removeAllRulesForSource(srcNet); err != nil {
 			return fmt.Errorf("failed to remove old routing rules for policy %s: %w", policy.Name, err)
 		}
 	}
 
 	// Add routing rule using ip command
-	logrus.Debugf("ADDING: New routing rule for policy %s: src=%s, table=%d", policy.Name, srcNet.String(), provider.TableID)
+	logrus.Debugf("ADDING: New routing rule for policy %s: src=%s, table=%d, priority=%d",
+		policy.Name, srcNet.String(), provider.TableID, wantPriority)
 	if err := m.addRoutingRule(srcNet, provider.TableID); err != nil {
 		return fmt.Errorf("failed to add routing rule for policy %s: %w", policy.Name, err)
 	}
@@ -218,24 +188,9 @@ func (m *Manager) RemovePolicy(policy *models.RoutingPolicy, provider *models.In
 	// Note: This function is called from SyncPolicies which already holds the mutex
 	// so we don't need to lock again here
 
-	// Parse policy ID as source IP/CIDR
-	var srcNet *net.IPNet
-
-	// Try to parse as CIDR first
-	_, ipnet, err := net.ParseCIDR(policy.ID)
+	srcNet, err := parsePolicySource(policy.ID)
 	if err != nil {
-		// Try as single IP
-		srcIP := net.ParseIP(policy.ID)
-		if srcIP == nil {
-			return fmt.Errorf("invalid policy ID as source IP/CIDR: %s", policy.ID)
-		}
-		// Create a /32 network for single IP
-		srcNet = &net.IPNet{
-			IP:   srcIP,
-			Mask: net.CIDRMask(32, 32),
-		}
-	} else {
-		srcNet = ipnet
+		return err
 	}
 
 	// Remove routing rule using ip command
@@ -382,47 +337,134 @@ func (m *Manager) GetRoutingStats() (map[string]interface{}, error) {
 	return stats, nil
 }
 
-// calculatePriority calculates the priority based on CIDR specificity
-// More specific CIDRs get lower priority numbers (higher priority)
-// calculatePriority calculates the priority based on CIDR specificity
-// More specific CIDRs get lower priority numbers (higher priority)
-// /32 = 32 bits = priority 2000
-// /31 = 31 bits = priority 2001
-// /30 = 30 bits = priority 2002
-// /29 = 29 bits = priority 2003
-// /28 = 28 bits = priority 2004
-// /27 = 27 bits = priority 2005
-// /26 = 26 bits = priority 2006
-// /25 = 25 bits = priority 2007
-// /24 = 24 bits = priority 2008
-// /23 = 23 bits = priority 2009
-// /22 = 22 bits = priority 2010
-// /21 = 21 bits = priority 2011
-// /20 = 20 bits = priority 2012
-// /19 = 19 bits = priority 2013
-// /18 = 18 bits = priority 2014
-// /17 = 17 bits = priority 2015
-// /16 = 16 bits = priority 2016
-// /15 = 15 bits = priority 2017
-// /14 = 14 bits = priority 2018
-// /13 = 13 bits = priority 2019
-// /12 = 12 bits = priority 2020
-// /11 = 11 bits = priority 2021
-// /10 = 10 bits = priority 2022
-// /9 = 9 bits = priority 2023
-// /8 = 8 bits = priority 2024
-// /7 = 7 bits = priority 2025
-// /6 = 6 bits = priority 2026
-// /5 = 5 bits = priority 2027
-// /4 = 4 bits = priority 2028
-// /3 = 3 bits = priority 2029
-// /2 = 2 bits = priority 2030
-// /1 = 1 bit = priority 2031
-// /0 = 0 bits = priority 2032
+// Managed ip rule priority range. Lower numbers are evaluated first by Linux.
+// Priority = managedPriorityMin + (32 - prefixLen), so /32 hosts win over
+// overlapping /25s and /24s, etc. Documented map covers /8–/32; /0–/7 still work.
+const (
+	managedPriorityMin = 2000
+	managedPriorityMax = 2032
+)
+
+// parsePolicySource parses a policy ID as a CIDR or bare IPv4 host (/32).
+func parsePolicySource(id string) (*net.IPNet, error) {
+	_, ipnet, err := net.ParseCIDR(id)
+	if err == nil {
+		return ipnet, nil
+	}
+	srcIP := net.ParseIP(id)
+	if srcIP == nil {
+		return nil, fmt.Errorf("invalid policy ID as source IP/CIDR: %s", id)
+	}
+	if v4 := srcIP.To4(); v4 != nil {
+		srcIP = v4
+	}
+	return &net.IPNet{
+		IP:   srcIP,
+		Mask: net.CIDRMask(32, 32),
+	}, nil
+}
+
+// calculatePriority maps IPv4 prefix length to an ip-rule priority.
+// More specific CIDRs get lower priority numbers (higher precedence):
+// /32 → 2000, /25 → 2007, /24 → 2008, /8 → 2024, /0 → 2032.
 func calculatePriority(srcNet *net.IPNet) int {
-	ones, _ := srcNet.Mask.Size()
-	specificity := ones // Number of network bits
-	return 2000 + (32 - specificity)
+	ones, bits := srcNet.Mask.Size()
+	if bits == 0 {
+		return managedPriorityMax
+	}
+	// IPv4 only: bits should be 32. Clamp ones into 0..32 for safety.
+	if ones < 0 {
+		ones = 0
+	}
+	if ones > 32 {
+		ones = 32
+	}
+	return managedPriorityMin + (32 - ones)
+}
+
+// fromSelectors returns the "from" tokens Linux may print for srcNet.
+// Host /32 rules often appear as a bare IP; CIDRs always include the mask.
+func fromSelectors(srcNet *net.IPNet) []string {
+	cidr := srcNet.String()
+	ones, bits := srcNet.Mask.Size()
+	if ones == bits {
+		return []string{cidr, srcNet.IP.String()}
+	}
+	return []string{cidr}
+}
+
+// normalizeFromToken canonicalizes an ip-rule "from" token to CIDR form
+// (hosts become /32) for set membership checks.
+func normalizeFromToken(from string) string {
+	if from == "" || from == "all" {
+		return from
+	}
+	if strings.Contains(from, "/") {
+		_, n, err := net.ParseCIDR(from)
+		if err == nil {
+			return n.String()
+		}
+		return from
+	}
+	ip := net.ParseIP(from)
+	if ip == nil {
+		return from
+	}
+	return (&net.IPNet{IP: ip.To4(), Mask: net.CIDRMask(32, 32)}).String()
+}
+
+// extractFromToken returns the token after "from" in an `ip rule show` line.
+func extractFromToken(line string) string {
+	parts := strings.Fields(line)
+	for i, part := range parts {
+		if part == "from" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// lineMatchesSource reports whether an `ip rule show` line is for srcNet.
+func lineMatchesSource(line string, srcNet *net.IPNet) bool {
+	from := extractFromToken(line)
+	if from == "" || from == "all" {
+		return false
+	}
+	for _, sel := range fromSelectors(srcNet) {
+		if from == sel {
+			return true
+		}
+	}
+	return false
+}
+
+// parsePriorityAndTable extracts priority and lookup table from an ip rule line.
+func parsePriorityAndTable(line string) (priority int, table int, ok bool) {
+	parts := strings.Fields(line)
+	if len(parts) < 4 {
+		return 0, 0, false
+	}
+	priorityStr := strings.TrimSuffix(parts[0], ":")
+	priority, err := strconv.Atoi(priorityStr)
+	if err != nil {
+		return 0, 0, false
+	}
+	tableStr := parts[len(parts)-1]
+	table, err = strconv.Atoi(tableStr)
+	if err != nil {
+		return priority, 0, false
+	}
+	return priority, table, true
+}
+
+// deleteRuleFrom removes one fib rule matching the given from selector.
+func deleteRuleFrom(from string) error {
+	cmd := exec.Command("ip", "rule", "del", "from", from)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ip rule del from %s: %w: %s", from, err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // checkRoutingRuleExists checks if a routing rule already exists for a given source network
@@ -437,31 +479,17 @@ func (m *Manager) checkRoutingRuleExists(srcNet *net.IPNet) (bool, int, int) {
 	ruleOutput := string(output)
 	logrus.Debugf("Current rules: %s", ruleOutput)
 
-	// Look for any rule with our source network
-	lines := strings.Split(ruleOutput, "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(ruleOutput, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || !lineMatchesSource(line, srcNet) {
 			continue
 		}
-
-		// Parse line format: "100: from 192.168.1.50 lookup 99"
-		// The rule output shows IP without CIDR suffix, so we need to match just the IP part
-		srcIP := srcNet.IP.String()
-		if strings.Contains(line, fmt.Sprintf("from %s", srcIP)) {
-			// Extract priority and table from the rule
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				priorityStr := strings.TrimSuffix(parts[0], ":")
-				tableStr := parts[len(parts)-1]
-
-				priority, _ := strconv.Atoi(priorityStr)
-				table, _ := strconv.Atoi(tableStr)
-
-				logrus.Debugf("Found existing rule: %s (priority: %d, table: %d)", line, priority, table)
-				return true, priority, table
-			}
+		priority, table, ok := parsePriorityAndTable(line)
+		if !ok {
+			continue
 		}
+		logrus.Debugf("Found existing rule: %s (priority: %d, table: %d)", line, priority, table)
+		return true, priority, table
 	}
 
 	logrus.Debugf("No existing rule found for source %s", srcNet.String())
@@ -470,12 +498,10 @@ func (m *Manager) checkRoutingRuleExists(srcNet *net.IPNet) (bool, int, int) {
 
 // removeAllRulesForSource removes all routing rules for a given source network
 func (m *Manager) removeAllRulesForSource(srcNet *net.IPNet) error {
-	srcIP := srcNet.IP.String()
 	removedCount := 0
 	maxAttempts := 10 // Prevent infinite loops
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// Get current rules
 		cmd := exec.Command("ip", "rule", "show")
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -483,49 +509,33 @@ func (m *Manager) removeAllRulesForSource(srcNet *net.IPNet) error {
 			return err
 		}
 
-		ruleOutput := string(output)
-		lines := strings.Split(ruleOutput, "\n")
 		foundRule := false
-
-		// Look for rules with our source network
-		for _, line := range lines {
+		for _, line := range strings.Split(string(output), "\n") {
 			line = strings.TrimSpace(line)
-			if line == "" {
+			if line == "" || !lineMatchesSource(line, srcNet) {
 				continue
 			}
-
-			// Check if this rule is for our specific source IP
-			if strings.Contains(line, fmt.Sprintf("from %s", srcIP)) {
-				// Extract priority from the rule
-				parts := strings.Fields(line)
-				if len(parts) >= 4 {
-					priorityStr := strings.TrimSuffix(parts[0], ":")
-					priority, _ := strconv.Atoi(priorityStr)
-
-					logrus.Infof("Removing rule for source %s: %s (priority: %d)", srcIP, line, priority)
-
-					// Remove the rule by source IP/CIDR instead of priority
-					// This is safer as it only removes rules for this specific source
-					cmd := exec.Command("ip", "rule", "del", "from", srcNet.String())
-					if err := cmd.Run(); err != nil {
-						logrus.Warnf("Failed to remove rule: %v", err)
-					} else {
-						removedCount++
-						foundRule = true
-						break // Remove one rule at a time
-					}
-				}
+			from := extractFromToken(line)
+			if from == "" {
+				continue
+			}
+			logrus.Infof("Removing rule for source %s: %s", srcNet.String(), line)
+			if err := deleteRuleFrom(from); err != nil {
+				logrus.Warnf("Failed to remove rule: %v", err)
+			} else {
+				removedCount++
+				foundRule = true
+				break // Remove one rule at a time
 			}
 		}
 
-		// If no rule was found or removed, we're done
 		if !foundRule {
 			break
 		}
 	}
 
 	if removedCount > 0 {
-		logrus.Infof("Removed %d rules for source %s", removedCount, srcIP)
+		logrus.Infof("Removed %d rules for source %s", removedCount, srcNet.String())
 	}
 
 	return nil
@@ -533,20 +543,17 @@ func (m *Manager) removeAllRulesForSource(srcNet *net.IPNet) error {
 
 // removeRoutingRule removes a routing rule for a given source network
 func (m *Manager) removeRoutingRule(srcNet *net.IPNet) error {
-	exists, priority, _ := m.checkRoutingRuleExists(srcNet)
+	exists, _, _ := m.checkRoutingRuleExists(srcNet)
 	if !exists {
 		logrus.Debugf("No rule to remove for source %s", srcNet.String())
 		return nil
 	}
 
-	cmd := exec.Command("ip", "rule", "del", "priority", strconv.Itoa(priority))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		logrus.Warnf("Failed to remove routing rule: %v, output: %s", err, string(output))
+	if err := m.removeAllRulesForSource(srcNet); err != nil {
 		return fmt.Errorf("failed to remove routing rule: %v", err)
 	}
 
-	logrus.Infof("Removed routing rule for source %s (priority: %d)", srcNet.String(), priority)
+	logrus.Infof("Removed routing rule for source %s", srcNet.String())
 
 	// Clear conntrack entries for this source network to ensure connections stop using the old routing
 	if err := m.clearConntrack(srcNet); err != nil {
@@ -610,28 +617,15 @@ func (m *Manager) cleanupStaleRules(activePolicies []*models.RoutingPolicy) erro
 		return err
 	}
 
-	// Create a set of active policy source networks
+	// Create a set of active policy source networks (canonical CIDR form)
 	activeSources := make(map[string]bool)
 	for _, policy := range activePolicies {
-		// Parse policy ID as source IP/CIDR
-		var srcNet *net.IPNet
-		_, ipnet, err := net.ParseCIDR(policy.ID)
+		srcNet, err := parsePolicySource(policy.ID)
 		if err != nil {
-			// Try as single IP
-			srcIP := net.ParseIP(policy.ID)
-			if srcIP == nil {
-				logrus.Warnf("Invalid policy ID as source IP/CIDR: %s", policy.ID)
-				continue
-			}
-			// Create a /32 network for single IP
-			srcNet = &net.IPNet{
-				IP:   srcIP,
-				Mask: net.CIDRMask(32, 32),
-			}
-		} else {
-			srcNet = ipnet
+			logrus.Warnf("Invalid policy ID as source IP/CIDR: %s", policy.ID)
+			continue
 		}
-		activeSources[srcNet.IP.String()] = true
+		activeSources[srcNet.String()] = true
 	}
 
 	// Parse rules and remove those that don't correspond to active policies
@@ -642,7 +636,6 @@ func (m *Manager) cleanupStaleRules(activePolicies []*models.RoutingPolicy) erro
 			continue
 		}
 
-		// Extract priority to check if it's in our managed range (100-132)
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
@@ -654,54 +647,24 @@ func (m *Manager) cleanupStaleRules(activePolicies []*models.RoutingPolicy) erro
 			continue // Skip lines that don't have valid priority
 		}
 
-		// Only manage rules in our priority range (2000-2032)
-		if priority < 2000 || priority > 2032 {
+		// Only manage rules in our priority range
+		if priority < managedPriorityMin || priority > managedPriorityMax {
 			continue // Skip rules outside our managed range
 		}
 
-		// Skip default rules that might be in our range
-		if strings.HasPrefix(line, "0:") || strings.HasPrefix(line, "32766:") || strings.HasPrefix(line, "32767:") {
+		from := extractFromToken(line)
+		if from == "" || from == "all" {
 			continue
 		}
 
-		// Parse line format: "100: from 192.168.1.50 lookup 99"
-		if strings.Contains(line, "from") && strings.Contains(line, "lookup") {
-			// Extract source IP from the rule
-			srcIP := ""
-			for i, part := range parts {
-				if part == "from" && i+1 < len(parts) {
-					srcIP = parts[i+1]
-					break
-				}
-			}
+		canonical := normalizeFromToken(from)
+		if activeSources[canonical] {
+			continue
+		}
 
-			if srcIP != "" {
-				// Check if this source IP matches any active policy
-				// We need to check both the exact match and the IP part (for CIDR rules)
-				found := false
-				if activeSources[srcIP] {
-					found = true
-				} else {
-					// For CIDR rules, also check the IP part without CIDR
-					// e.g., if rule shows "192.168.1.0/24", also check "192.168.1.0"
-					if strings.Contains(srcIP, "/") {
-						ipPart := strings.Split(srcIP, "/")[0]
-						if activeSources[ipPart] {
-							found = true
-						}
-					}
-				}
-
-				if !found {
-					// This rule is for a policy that no longer exists
-					logrus.Infof("Removing stale rule for inactive policy: %s (priority: %d)", line, priority)
-
-					cmd := exec.Command("ip", "rule", "del", "priority", strconv.Itoa(priority))
-					if err := cmd.Run(); err != nil {
-						logrus.Warnf("Failed to remove stale rule: %v", err)
-					}
-				}
-			}
+		logrus.Infof("Removing stale rule for inactive policy: %s (priority: %d)", line, priority)
+		if err := deleteRuleFrom(from); err != nil {
+			logrus.Warnf("Failed to remove stale rule: %v", err)
 		}
 	}
 
@@ -724,14 +687,13 @@ func (m *Manager) cleanupDuplicateRules() error {
 	sourceRules := make(map[string][]string)
 	lines := strings.Split(string(output), "\n")
 
-	// Parse all rules and group by source IP (only for our managed priority range 2000-2032)
+	// Parse all rules and group by source (only for our managed priority range)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 
-		// Extract priority to check if it's in our managed range (2000-2032)
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
@@ -743,46 +705,38 @@ func (m *Manager) cleanupDuplicateRules() error {
 			continue // Skip lines that don't have valid priority
 		}
 
-		// Only process rules in our managed range (2000-2032)
-		if priority < 2000 || priority > 2032 {
+		if priority < managedPriorityMin || priority > managedPriorityMax {
 			continue
 		}
 
-		// Extract source IP from the rule
-		if strings.Contains(line, "from") && strings.Contains(line, "lookup") {
-			for i, part := range parts {
-				if part == "from" && i+1 < len(parts) {
-					srcIP := parts[i+1]
-					sourceRules[srcIP] = append(sourceRules[srcIP], line)
-					break
-				}
-			}
+		from := extractFromToken(line)
+		if from == "" || from == "all" {
+			continue
 		}
+		key := normalizeFromToken(from)
+		sourceRules[key] = append(sourceRules[key], line)
 	}
 
-	// Remove duplicate rules, keeping only the first one for each source IP
+	// Remove duplicate rules, keeping only the first one for each source
 	removedCount := 0
-	for srcIP, rules := range sourceRules {
-		if len(rules) > 1 {
-			logrus.Infof("Found %d duplicate rules for source %s, keeping first one", len(rules), srcIP)
+	for srcKey, rules := range sourceRules {
+		if len(rules) <= 1 {
+			continue
+		}
+		logrus.Infof("Found %d duplicate rules for source %s, keeping first one", len(rules), srcKey)
 
-			// Keep the first rule, remove the rest
-			for i := 1; i < len(rules); i++ {
-				rule := rules[i]
-				parts := strings.Fields(rule)
-				if len(parts) >= 1 {
-					priorityStr := strings.TrimSuffix(parts[0], ":")
-					priority, _ := strconv.Atoi(priorityStr)
-
-					logrus.Infof("Removing duplicate rule: %s (priority: %d)", rule, priority)
-
-					cmd := exec.Command("ip", "rule", "del", "priority", strconv.Itoa(priority))
-					if err := cmd.Run(); err != nil {
-						logrus.Warnf("Failed to remove duplicate rule: %v", err)
-					} else {
-						removedCount++
-					}
-				}
+		// Keep the first rule, remove the rest
+		for i := 1; i < len(rules); i++ {
+			rule := rules[i]
+			from := extractFromToken(rule)
+			if from == "" {
+				continue
+			}
+			logrus.Infof("Removing duplicate rule: %s", rule)
+			if err := deleteRuleFrom(from); err != nil {
+				logrus.Warnf("Failed to remove duplicate rule: %v", err)
+			} else {
+				removedCount++
 			}
 		}
 	}
@@ -798,7 +752,7 @@ func (m *Manager) cleanupDuplicateRules() error {
 
 // suppressDefaultRulePriority is the priority of the "fall through to main but
 // ignore its default route" rule. It must sit BEFORE the per-policy rules
-// (which live in 2000-2032) so local traffic to other LAN subnets always
+// (which live in managedPriorityMin–managedPriorityMax) so local traffic to other LAN subnets always
 // resolves via the main table, while default-route traffic falls through to
 // the policy rules and out the chosen provider table.
 const suppressDefaultRulePriority = 10
@@ -895,9 +849,10 @@ func (m *Manager) hasSuppressDefaultRule() (bool, error) {
 	return false, nil
 }
 
-// CleanupAllRules removes all routing rules managed by this application (priority 2000-2032)
+// CleanupAllRules removes all routing rules managed by this application
+// (priority managedPriorityMin–managedPriorityMax).
 func (m *Manager) CleanupAllRules() error {
-	logrus.Info("Cleaning up all routing rules (priority 2000-2032)")
+	logrus.Infof("Cleaning up all routing rules (priority %d-%d)", managedPriorityMin, managedPriorityMax)
 
 	// Get all current routing rules
 	cmd := exec.Command("ip", "rule", "show")
@@ -907,7 +862,7 @@ func (m *Manager) CleanupAllRules() error {
 		return err
 	}
 
-	// Parse rules and remove those in our managed range
+	// Parse rules and remove those in our managed range (delete by from, not priority)
 	lines := strings.Split(string(output), "\n")
 	removedCount := 0
 
@@ -917,7 +872,6 @@ func (m *Manager) CleanupAllRules() error {
 			continue
 		}
 
-		// Extract priority to check if it's in our managed range (2000-2032)
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
@@ -929,16 +883,20 @@ func (m *Manager) CleanupAllRules() error {
 			continue // Skip lines that don't have valid priority
 		}
 
-		// Only remove rules in our managed range (2000-2032)
-		if priority >= 2000 && priority <= 2032 {
-			logrus.Infof("Removing rule during cleanup: %s (priority: %d)", line, priority)
+		if priority < managedPriorityMin || priority > managedPriorityMax {
+			continue
+		}
 
-			cmd := exec.Command("ip", "rule", "del", "priority", strconv.Itoa(priority))
-			if err := cmd.Run(); err != nil {
-				logrus.Warnf("Failed to remove rule during cleanup: %v", err)
-			} else {
-				removedCount++
-			}
+		from := extractFromToken(line)
+		if from == "" || from == "all" {
+			continue
+		}
+
+		logrus.Infof("Removing rule during cleanup: %s (priority: %d)", line, priority)
+		if err := deleteRuleFrom(from); err != nil {
+			logrus.Warnf("Failed to remove rule during cleanup: %v", err)
+		} else {
+			removedCount++
 		}
 	}
 
@@ -955,7 +913,7 @@ func (m *Manager) validateSingleRulePerSource() error {
 		return err
 	}
 
-	// Track source IPs and their rules (only for our managed priority range 2000-2032)
+	// Track source IPs and their rules (only for our managed priority range)
 	sourceRules := make(map[string][]string)
 	lines := strings.Split(string(output), "\n")
 
@@ -966,7 +924,6 @@ func (m *Manager) validateSingleRulePerSource() error {
 			continue
 		}
 
-		// Extract priority to check if it's in our managed range (2000-2032)
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
@@ -978,25 +935,16 @@ func (m *Manager) validateSingleRulePerSource() error {
 			continue // Skip lines that don't have valid priority
 		}
 
-		// Only process rules in our managed range (2000-2032)
-		if priority < 2000 || priority > 2032 {
+		if priority < managedPriorityMin || priority > managedPriorityMax {
 			continue
 		}
 
-		// Extract source IP from the rule
-		if strings.Contains(line, "from") && strings.Contains(line, "lookup") {
-			for i, part := range parts {
-				if part == "from" && i+1 < len(parts) {
-					srcIP := parts[i+1]
-					// Ignore 'from all' system rules
-					if srcIP == "all" {
-						break
-					}
-					sourceRules[srcIP] = append(sourceRules[srcIP], line)
-					break
-				}
-			}
+		from := extractFromToken(line)
+		if from == "" || from == "all" {
+			continue
 		}
+		key := normalizeFromToken(from)
+		sourceRules[key] = append(sourceRules[key], line)
 	}
 
 	// Check for violations
